@@ -1,6 +1,8 @@
 const endpointInput = document.getElementById("endpoint");
+const authTokenInput = document.getElementById("auth-token");
 const captureButton = document.getElementById("capture");
 const statusEl = document.getElementById("status");
+const queueStatusEl = document.getElementById("queue-status");
 const resultEl = document.getElementById("result");
 
 function extractArxivId(url) {
@@ -27,9 +29,12 @@ function extractArxivId(url) {
 }
 
 async function loadEndpoint() {
-  const stored = await chrome.storage.local.get(["papertoolEndpoint"]);
+  const stored = await chrome.storage.local.get(["papertoolEndpoint", "papertoolAuthToken"]);
   if (stored.papertoolEndpoint) {
     endpointInput.value = stored.papertoolEndpoint;
+  }
+  if (stored.papertoolAuthToken) {
+    authTokenInput.value = stored.papertoolAuthToken;
   }
 }
 
@@ -38,9 +43,33 @@ function setStatus(text, isError = false) {
   statusEl.style.color = isError ? "#b91c1c" : "#0f172a";
 }
 
+function setQueueStatus(text) {
+  queueStatusEl.textContent = text;
+  queueStatusEl.style.color = "#334155";
+}
+
 async function getCurrentTab() {
   const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
   return tabs[0];
+}
+
+async function refreshQueueStatus() {
+  try {
+    const payload = await chrome.runtime.sendMessage({ type: "papertool_queue_status" });
+    if (!payload || !payload.ok) {
+      setQueueStatus("Queue status unavailable");
+      return;
+    }
+    const last = payload.lastUpload;
+    const lastStatus = last
+      ? last.ok
+        ? `last=ok @ ${new Date(last.at).toLocaleTimeString()}`
+        : `last=failed (${last.error || "error"})`
+      : "last=n/a";
+    setQueueStatus(`Queue: pending=${payload.pending} failed=${payload.failed} ${lastStatus}`);
+  } catch {
+    setQueueStatus("Queue status unavailable");
+  }
 }
 
 async function captureCurrentTab() {
@@ -50,11 +79,15 @@ async function captureCurrentTab() {
 
   try {
     const endpoint = endpointInput.value.trim().replace(/\/$/, "");
+    const authToken = authTokenInput.value.trim();
     if (!endpoint) {
       throw new Error("Bridge endpoint is required");
     }
 
-    await chrome.storage.local.set({ papertoolEndpoint: endpoint });
+    await chrome.storage.local.set({
+      papertoolEndpoint: endpoint,
+      papertoolAuthToken: authToken,
+    });
 
     const tab = await getCurrentTab();
     if (!tab || !tab.url) {
@@ -73,8 +106,16 @@ async function captureCurrentTab() {
       throw new Error(payload?.error || "Capture failed");
     }
 
-    setStatus("Captured and ingested successfully.");
-    resultEl.textContent = JSON.stringify(payload.result, null, 2);
+    setStatus("Captured and queued for upload.");
+    resultEl.textContent = JSON.stringify(
+      {
+        request_id: payload.request_id,
+        queue: payload.queue,
+      },
+      null,
+      2
+    );
+    await refreshQueueStatus();
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     setStatus(message, true);
@@ -85,3 +126,4 @@ async function captureCurrentTab() {
 
 captureButton.addEventListener("click", captureCurrentTab);
 loadEndpoint().catch(() => undefined);
+refreshQueueStatus().catch(() => undefined);

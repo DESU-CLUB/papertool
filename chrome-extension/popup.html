@@ -12,9 +12,12 @@
 
       <label for="endpoint">Bridge endpoint</label>
       <input id="endpoint" type="text" value="http://127.0.0.1:17345" />
+      <label for="auth-token">Bearer token (optional)</label>
+      <input id="auth-token" type="password" value="" placeholder="for /v1/captures API" />
 
       <button id="capture">Capture Current Tab</button>
       <p id="status"></p>
+      <p id="queue-status"></p>
       <pre id="result"></pre>
     </main>
 
