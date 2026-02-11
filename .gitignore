@@ -7,3 +7,7 @@ __pycache__/
 build/
 *.egg-info/
 .context/
+
+# Rust build artifacts
+rust/**/target/
+rust/**/Cargo.lock
