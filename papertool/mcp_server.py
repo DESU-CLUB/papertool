@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 
 from papertool.config import load_config
-from papertool.db import PaperDB
 from papertool.graph import export_graph_json
 from papertool.obsidian import append_qa_to_daily_note, append_qa_to_paper_note, upsert_paper_note
 from papertool.planner import (
@@ -16,6 +15,7 @@ from papertool.planner import (
 from papertool.quiz import generate_daily_quiz, quiz_to_dict
 from papertool.retrieval import hits_to_dict, retrieve, synthesize_answer
 from papertool.rust_backend import build_clusters, build_index
+from papertool.store import create_store
 from papertool.url_import import import_result_to_dict, import_url_to_library
 
 try:
@@ -27,8 +27,9 @@ except Exception:  # pragma: no cover - dependency optional until installed
 class Runtime:
     def __init__(self) -> None:
         self.config = load_config()
-        self.db = PaperDB(self.config.db_path)
-        self.db.initialize()
+        self.store = create_store(self.config)
+        self.store.initialize()
+        self.db = self.store.db
 
 
 runtime: Runtime | None = None
@@ -256,6 +257,24 @@ if FastMCP:
                 for row in rows
             ],
         }
+
+    @mcp.tool()
+    def sync_status() -> dict[str, object]:
+        """Return sync backend status and last pull/push timestamps."""
+        rt = get_runtime()
+        return rt.store.sync_status()
+
+    @mcp.tool()
+    def sync_now(pull: bool = True, push: bool = True) -> dict[str, object]:
+        """Run an immediate sync cycle against remote backend."""
+        rt = get_runtime()
+        return rt.store.sync_run(pull=pull, push=push)
+
+    @mcp.tool()
+    def remote_health() -> dict[str, object]:
+        """Check configured remote API and CouchDB health."""
+        rt = get_runtime()
+        return rt.store.remote_health()
 
     @mcp.tool()
     def queue_overview(status: str | None = None, limit: int = 50) -> dict[str, object]:

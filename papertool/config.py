@@ -23,6 +23,20 @@ class PaperToolConfig:
     retrieval_backend: str = "shadow"
     rust_index_dir: Path | None = None
     cluster_mode: str = "on_demand"
+    storage_backend: str = "sqlite"
+    remote_api_base_url: str | None = None
+    remote_api_token: str | None = None
+    couchdb_url: str | None = None
+    couchdb_db_meta: str = "papertool_meta"
+    couchdb_db_events: str = "papertool_events"
+    couchdb_db_jobs: str = "papertool_jobs"
+    minio_endpoint: str | None = None
+    minio_bucket: str = "papertool-files"
+    minio_access_key: str | None = None
+    minio_secret_key: str | None = None
+    sync_enabled: bool = True
+    sync_pull_interval_sec: int = 30
+    sync_push_interval_sec: int = 30
 
 
 def _resolve_path(path_value: str | None, root: Path) -> Path | None:
@@ -69,6 +83,20 @@ def load_config(config_path: Path | None = None) -> PaperToolConfig:
         retrieval_backend=str(raw.get("retrieval_backend") or cfg.retrieval_backend),
         rust_index_dir=rust_index_dir or cfg.rust_index_dir,
         cluster_mode=str(raw.get("cluster_mode") or cfg.cluster_mode),
+        storage_backend=str(raw.get("storage_backend") or cfg.storage_backend),
+        remote_api_base_url=(str(raw.get("remote_api_base_url")) if raw.get("remote_api_base_url") else None),
+        remote_api_token=(str(raw.get("remote_api_token")) if raw.get("remote_api_token") else None),
+        couchdb_url=(str(raw.get("couchdb_url")) if raw.get("couchdb_url") else None),
+        couchdb_db_meta=str(raw.get("couchdb_db_meta") or cfg.couchdb_db_meta),
+        couchdb_db_events=str(raw.get("couchdb_db_events") or cfg.couchdb_db_events),
+        couchdb_db_jobs=str(raw.get("couchdb_db_jobs") or cfg.couchdb_db_jobs),
+        minio_endpoint=(str(raw.get("minio_endpoint")) if raw.get("minio_endpoint") else None),
+        minio_bucket=str(raw.get("minio_bucket") or cfg.minio_bucket),
+        minio_access_key=(str(raw.get("minio_access_key")) if raw.get("minio_access_key") else None),
+        minio_secret_key=(str(raw.get("minio_secret_key")) if raw.get("minio_secret_key") else None),
+        sync_enabled=bool(raw.get("sync_enabled", cfg.sync_enabled)),
+        sync_pull_interval_sec=int(raw.get("sync_pull_interval_sec") or cfg.sync_pull_interval_sec),
+        sync_push_interval_sec=int(raw.get("sync_push_interval_sec") or cfg.sync_push_interval_sec),
     )
 
 
@@ -88,6 +116,20 @@ def dump_config(config: PaperToolConfig, config_path: Path | None = None) -> Pat
         f'retrieval_backend = "{config.retrieval_backend}"',
         f'rust_index_dir = "{_display(config.rust_index_dir)}"',
         f'cluster_mode = "{config.cluster_mode}"',
+        f'storage_backend = "{config.storage_backend}"',
+        f'remote_api_base_url = "{config.remote_api_base_url or ""}"',
+        f'remote_api_token = "{config.remote_api_token or ""}"',
+        f'couchdb_url = "{config.couchdb_url or ""}"',
+        f'couchdb_db_meta = "{config.couchdb_db_meta}"',
+        f'couchdb_db_events = "{config.couchdb_db_events}"',
+        f'couchdb_db_jobs = "{config.couchdb_db_jobs}"',
+        f'minio_endpoint = "{config.minio_endpoint or ""}"',
+        f'minio_bucket = "{config.minio_bucket}"',
+        f'minio_access_key = "{config.minio_access_key or ""}"',
+        f'minio_secret_key = "{config.minio_secret_key or ""}"',
+        f"sync_enabled = {'true' if config.sync_enabled else 'false'}",
+        f"sync_pull_interval_sec = {int(config.sync_pull_interval_sec)}",
+        f"sync_push_interval_sec = {int(config.sync_push_interval_sec)}",
     ]
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return path
@@ -113,4 +155,18 @@ def config_from_kwargs(project_root: Path, values: dict[str, Any]) -> PaperToolC
     cfg.obsidian_daily_dir = values.get("obsidian_daily_dir") or cfg.obsidian_daily_dir
     cfg.retrieval_backend = str(values.get("retrieval_backend") or cfg.retrieval_backend)
     cfg.cluster_mode = str(values.get("cluster_mode") or cfg.cluster_mode)
+    cfg.storage_backend = str(values.get("storage_backend") or cfg.storage_backend)
+    cfg.remote_api_base_url = values.get("remote_api_base_url") or cfg.remote_api_base_url
+    cfg.remote_api_token = values.get("remote_api_token") or cfg.remote_api_token
+    cfg.couchdb_url = values.get("couchdb_url") or cfg.couchdb_url
+    cfg.couchdb_db_meta = values.get("couchdb_db_meta") or cfg.couchdb_db_meta
+    cfg.couchdb_db_events = values.get("couchdb_db_events") or cfg.couchdb_db_events
+    cfg.couchdb_db_jobs = values.get("couchdb_db_jobs") or cfg.couchdb_db_jobs
+    cfg.minio_endpoint = values.get("minio_endpoint") or cfg.minio_endpoint
+    cfg.minio_bucket = values.get("minio_bucket") or cfg.minio_bucket
+    cfg.minio_access_key = values.get("minio_access_key") or cfg.minio_access_key
+    cfg.minio_secret_key = values.get("minio_secret_key") or cfg.minio_secret_key
+    cfg.sync_enabled = bool(values.get("sync_enabled", cfg.sync_enabled))
+    cfg.sync_pull_interval_sec = int(values.get("sync_pull_interval_sec") or cfg.sync_pull_interval_sec)
+    cfg.sync_push_interval_sec = int(values.get("sync_push_interval_sec") or cfg.sync_push_interval_sec)
     return cfg

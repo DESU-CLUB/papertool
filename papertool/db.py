@@ -162,6 +162,12 @@ class PaperDB:
                 papers_processed INTEGER NOT NULL DEFAULT 0
             );
 
+            CREATE TABLE IF NOT EXISTS sync_state (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
             CREATE INDEX IF NOT EXISTS idx_papers_mtime ON papers(mtime);
             CREATE INDEX IF NOT EXISTS idx_papers_arxiv_id ON papers(arxiv_id);
             CREATE INDEX IF NOT EXISTS idx_chunks_paper ON chunks(paper_id);
@@ -955,3 +961,25 @@ class PaperDB:
                 (limit,),
             ).fetchall()
         )
+
+    def set_sync_state(self, key: str, value: str) -> None:
+        self.conn.execute(
+            """
+            INSERT INTO sync_state(key, value, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(key) DO UPDATE SET
+                value = excluded.value,
+                updated_at = excluded.updated_at
+            """,
+            (key, value, utc_now_iso()),
+        )
+        self.conn.commit()
+
+    def get_sync_state(self, key: str) -> str | None:
+        row = self.conn.execute("SELECT value FROM sync_state WHERE key = ?", (key,)).fetchone()
+        if not row:
+            return None
+        return str(row["value"])
+
+    def sync_state_all(self) -> list[sqlite3.Row]:
+        return list(self.conn.execute("SELECT key, value, updated_at FROM sync_state ORDER BY key ASC").fetchall())
