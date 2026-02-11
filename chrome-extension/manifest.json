@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "PaperTool Capture",
+  "description": "Capture the current page URL directly into your local PaperTool library.",
+  "version": "0.1.0",
+  "permissions": ["tabs", "storage"],
+  "host_permissions": [
+    "http://127.0.0.1:17345/*",
+    "http://localhost:17345/*"
+  ],
+  "action": {
+    "default_title": "PaperTool Capture",
+    "default_popup": "popup.html"
+  }
+}

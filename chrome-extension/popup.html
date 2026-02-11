@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>PaperTool Capture</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main>
+      <h1>PaperTool Capture</h1>
+
+      <label for="endpoint">Bridge endpoint</label>
+      <input id="endpoint" type="text" value="http://127.0.0.1:17345" />
+
+      <button id="capture">Capture Current Tab</button>
+      <p id="status"></p>
+      <pre id="result"></pre>
+    </main>
+
+    <script src="popup.js"></script>
+  </body>
+</html>
