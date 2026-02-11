@@ -3,6 +3,29 @@ const captureButton = document.getElementById("capture");
 const statusEl = document.getElementById("status");
 const resultEl = document.getElementById("result");
 
+function extractArxivId(url) {
+  if (!url) return null;
+  try {
+    const parsed = new URL(url);
+    if (!parsed.hostname.toLowerCase().includes("arxiv.org")) return null;
+
+    let raw = "";
+    if (parsed.pathname.startsWith("/abs/")) raw = parsed.pathname.slice("/abs/".length);
+    else if (parsed.pathname.startsWith("/pdf/")) raw = parsed.pathname.slice("/pdf/".length);
+    else return null;
+
+    raw = raw
+      .replace(/\.pdf$/i, "")
+      .replace(/^\/+|\/+$/g, "")
+      .replace(/^arxiv:/i, "")
+      .replace(/v\d+$/i, "")
+      .toLowerCase();
+    return raw || null;
+  } catch {
+    return null;
+  }
+}
+
 async function loadEndpoint() {
   const stored = await chrome.storage.local.get(["papertoolEndpoint"]);
   if (stored.papertoolEndpoint) {
@@ -41,18 +64,13 @@ async function captureCurrentTab() {
       throw new Error("This page cannot be captured");
     }
 
-    const response = await fetch(`${endpoint}/capture`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        url: tab.url,
-        title: tab.title || "",
-      }),
+    const payload = await chrome.runtime.sendMessage({
+      type: "papertool_capture",
+      url: tab.url,
+      title: extractArxivId(tab.url) || tab.title || "",
     });
-
-    const payload = await response.json();
-    if (!response.ok || !payload.ok) {
-      throw new Error(payload.error || `Capture failed (${response.status})`);
+    if (!payload || !payload.ok) {
+      throw new Error(payload?.error || "Capture failed");
     }
 
     setStatus("Captured and ingested successfully.");

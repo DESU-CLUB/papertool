@@ -1,6 +1,12 @@
 # PaperTool Chrome Extension
 
-This extension sends the current tab URL to the local PaperTool bridge API.
+This extension sends URLs to the local PaperTool bridge API.
+
+After install, it adds inline `Save to PaperTool` buttons on:
+- arXiv search result cards
+- arXiv paper abstract pages
+- Google Search results (paper-like links)
+- Google Scholar results
 
 ## Setup
 
@@ -12,9 +18,9 @@ This extension sends the current tab URL to the local PaperTool bridge API.
 
 ## Usage
 
-1. Open a page you want to capture (arXiv, GitHub, X, or any web page).
-2. Click `PaperTool Capture` extension icon.
-3. Confirm bridge endpoint (default `http://127.0.0.1:17345`).
-4. Click `Capture Current Tab`.
+1. Open arXiv, Google Search, or Google Scholar.
+2. Click inline `Save to PaperTool` beside a paper result title.
+3. Or click extension popup and use `Capture Current Tab` on any page.
+4. Set bridge endpoint in popup if needed (default `http://127.0.0.1:17345`).
 
 The bridge imports the URL into `library/captures/` and ingests it into PaperTool.

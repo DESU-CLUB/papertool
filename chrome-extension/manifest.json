@@ -2,11 +2,31 @@
   "manifest_version": 3,
   "name": "PaperTool Capture",
   "description": "Capture the current page URL directly into your local PaperTool library.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "permissions": ["tabs", "storage"],
   "host_permissions": [
     "http://127.0.0.1:17345/*",
-    "http://localhost:17345/*"
+    "http://localhost:17345/*",
+    "https://arxiv.org/*",
+    "https://*.arxiv.org/*",
+    "https://www.google.com/*",
+    "https://scholar.google.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://arxiv.org/*",
+        "https://*.arxiv.org/*",
+        "https://www.google.com/*",
+        "https://scholar.google.com/*"
+      ],
+      "js": ["content.js"],
+      "css": ["content.css"],
+      "run_at": "document_idle"
+    }
   ],
   "action": {
     "default_title": "PaperTool Capture",
