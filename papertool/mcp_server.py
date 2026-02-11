@@ -15,6 +15,7 @@ from papertool.planner import (
 )
 from papertool.quiz import generate_daily_quiz, quiz_to_dict
 from papertool.retrieval import hits_to_dict, retrieve, synthesize_answer
+from papertool.rust_backend import build_clusters, build_index
 from papertool.url_import import import_result_to_dict, import_url_to_library
 
 try:
@@ -63,20 +64,47 @@ if FastMCP:
         return {"count": len(papers), "papers": papers}
 
     @mcp.tool()
-    def search_papers(query: str, top_k: int = 6) -> dict[str, object]:
+    def search_papers(
+        query: str,
+        top_k: int = 6,
+        topic: str | None = None,
+        community_id: str | None = None,
+    ) -> dict[str, object]:
         """Search paper content and return matching passages."""
         rt = get_runtime()
-        hits = retrieve(rt.db, query, top_k=top_k)
+        hits = retrieve(
+            rt.db,
+            query,
+            top_k=top_k,
+            topic=topic,
+            community_id=community_id,
+            config=rt.config,
+        )
         return {
             "query": query,
+            "topic": topic,
+            "community_id": community_id,
             "hits": hits_to_dict(hits),
         }
 
     @mcp.tool()
-    def ask_papers(question: str, top_k: int = 6, save_to_obsidian: bool = True) -> dict[str, object]:
+    def ask_papers(
+        question: str,
+        top_k: int = 6,
+        save_to_obsidian: bool = True,
+        topic: str | None = None,
+        community_id: str | None = None,
+    ) -> dict[str, object]:
         """Ask a question against your paper library and get an evidence-grounded answer."""
         rt = get_runtime()
-        hits = retrieve(rt.db, question, top_k=top_k)
+        hits = retrieve(
+            rt.db,
+            question,
+            top_k=top_k,
+            topic=topic,
+            community_id=community_id,
+            config=rt.config,
+        )
         answer = synthesize_answer(question, hits)
         paper_ids = list(dict.fromkeys(hit.paper_id for hit in hits))
         rt.db.log_qa(question, answer, paper_ids=paper_ids, channel="mcp")
@@ -116,6 +144,8 @@ if FastMCP:
 
         return {
             "question": question,
+            "topic": topic,
+            "community_id": community_id,
             "answer": answer,
             "sources": hits_to_dict(hits),
             "notes_written": notes_written,
@@ -176,6 +206,56 @@ if FastMCP:
             except Exception as exc:
                 failed.append({"url": url, "error": str(exc)})
         return {"imported": imported, "failed": failed}
+
+    @mcp.tool()
+    def build_retrieval_index(paper_id: str | None = None) -> dict[str, object]:
+        """Build or refresh the Rust retrieval index."""
+        rt = get_runtime()
+        return build_index(rt.db, rt.config.rust_index_dir, paper_id=paper_id)
+
+    @mcp.tool()
+    def build_clusters_index() -> dict[str, object]:
+        """Build topic and citation-community clusters on-demand."""
+        rt = get_runtime()
+        return build_clusters(rt.db, rt.config.rust_index_dir)
+
+    @mcp.tool()
+    def clusters_overview(type: str = "topic", limit: int = 50) -> dict[str, object]:
+        """List topic or citation-community cluster buckets."""
+        rt = get_runtime()
+        rows = rt.db.cluster_overview(type, limit=max(1, limit))
+        return {
+            "type": type,
+            "count": len(rows),
+            "clusters": [
+                {
+                    "cluster_key": row["cluster_key"],
+                    "paper_count": row["paper_count"],
+                    "avg_score": row["avg_score"],
+                }
+                for row in rows
+            ],
+        }
+
+    @mcp.tool()
+    def cluster_papers(topic: str | None = None, community_id: str | None = None, limit: int = 100) -> dict[str, object]:
+        """List papers in a topic cluster or citation community."""
+        rt = get_runtime()
+        rows = rt.db.cluster_papers(topic=topic, community_id=community_id, limit=max(1, limit))
+        return {
+            "topic": topic,
+            "community_id": community_id,
+            "count": len(rows),
+            "papers": [
+                {
+                    "id": row["id"],
+                    "title": row["title"],
+                    "path": row["path"],
+                    "cluster_score": row["cluster_score"],
+                }
+                for row in rows
+            ],
+        }
 
     @mcp.tool()
     def queue_overview(status: str | None = None, limit: int = 50) -> dict[str, object]:

@@ -20,6 +20,9 @@ class PaperToolConfig:
     obsidian_vault: Path | None = None
     obsidian_papers_dir: str = "Papers"
     obsidian_daily_dir: str = "Daily"
+    retrieval_backend: str = "shadow"
+    rust_index_dir: Path | None = None
+    cluster_mode: str = "on_demand"
 
 
 def _resolve_path(path_value: str | None, root: Path) -> Path | None:
@@ -32,10 +35,12 @@ def _resolve_path(path_value: str | None, root: Path) -> Path | None:
 
 
 def default_config(project_root: Path) -> PaperToolConfig:
+    rust_index_dir = (project_root / ".papertool" / "index" / "v1").resolve()
     return PaperToolConfig(
         library_dir=(project_root / "library").resolve(),
         db_path=(project_root / ".papertool" / "papertool.db").resolve(),
         obsidian_vault=None,
+        rust_index_dir=rust_index_dir,
     )
 
 
@@ -52,6 +57,7 @@ def load_config(config_path: Path | None = None) -> PaperToolConfig:
     library_dir = _resolve_path(raw.get("library_dir"), project_root)
     db_path = _resolve_path(raw.get("db_path"), project_root)
     obsidian_vault = _resolve_path(raw.get("obsidian_vault"), project_root)
+    rust_index_dir = _resolve_path(raw.get("rust_index_dir"), project_root)
 
     cfg = default_config(project_root)
     return PaperToolConfig(
@@ -60,6 +66,9 @@ def load_config(config_path: Path | None = None) -> PaperToolConfig:
         obsidian_vault=obsidian_vault,
         obsidian_papers_dir=str(raw.get("obsidian_papers_dir") or cfg.obsidian_papers_dir),
         obsidian_daily_dir=str(raw.get("obsidian_daily_dir") or cfg.obsidian_daily_dir),
+        retrieval_backend=str(raw.get("retrieval_backend") or cfg.retrieval_backend),
+        rust_index_dir=rust_index_dir or cfg.rust_index_dir,
+        cluster_mode=str(raw.get("cluster_mode") or cfg.cluster_mode),
     )
 
 
@@ -76,6 +85,9 @@ def dump_config(config: PaperToolConfig, config_path: Path | None = None) -> Pat
         f'obsidian_vault = "{_display(config.obsidian_vault)}"',
         f'obsidian_papers_dir = "{config.obsidian_papers_dir}"',
         f'obsidian_daily_dir = "{config.obsidian_daily_dir}"',
+        f'retrieval_backend = "{config.retrieval_backend}"',
+        f'rust_index_dir = "{_display(config.rust_index_dir)}"',
+        f'cluster_mode = "{config.cluster_mode}"',
     ]
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return path
@@ -86,6 +98,7 @@ def config_from_kwargs(project_root: Path, values: dict[str, Any]) -> PaperToolC
     library_dir = values.get("library_dir")
     db_path = values.get("db_path")
     obsidian_vault = values.get("obsidian_vault")
+    rust_index_dir = values.get("rust_index_dir")
 
     if library_dir:
         cfg.library_dir = Path(library_dir).expanduser().resolve()
@@ -93,7 +106,11 @@ def config_from_kwargs(project_root: Path, values: dict[str, Any]) -> PaperToolC
         cfg.db_path = Path(db_path).expanduser().resolve()
     if obsidian_vault:
         cfg.obsidian_vault = Path(obsidian_vault).expanduser().resolve()
+    if rust_index_dir:
+        cfg.rust_index_dir = Path(rust_index_dir).expanduser().resolve()
 
     cfg.obsidian_papers_dir = values.get("obsidian_papers_dir") or cfg.obsidian_papers_dir
     cfg.obsidian_daily_dir = values.get("obsidian_daily_dir") or cfg.obsidian_daily_dir
+    cfg.retrieval_backend = str(values.get("retrieval_backend") or cfg.retrieval_backend)
+    cfg.cluster_mode = str(values.get("cluster_mode") or cfg.cluster_mode)
     return cfg

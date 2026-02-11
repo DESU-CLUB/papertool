@@ -148,8 +148,25 @@ def ingest_file(db: PaperDB, path: Path, stats: IngestStats | None = None) -> In
 
     db.upsert_paper(paper, text)
     db.insert_chunks(paper.id, split_chunks(text))
+    _maybe_refresh_retrieval_index(db, paper.id)
     stats.ingested += 1
     return stats
+
+
+def _maybe_refresh_retrieval_index(db: PaperDB, paper_id: str) -> None:
+    # Index refresh is best-effort. Retrieval falls back to Python if Rust is unavailable.
+    try:
+        from papertool.config import load_config
+        from papertool.rust_backend import build_index
+
+        cfg = load_config()
+        if cfg.db_path.resolve() != db.db_path.resolve():
+            return
+        if cfg.retrieval_backend not in {"shadow", "rust"}:
+            return
+        build_index(db, cfg.rust_index_dir, paper_id=paper_id)
+    except Exception:
+        return
 
 
 def rebuild_citation_graph(db: PaperDB) -> None:

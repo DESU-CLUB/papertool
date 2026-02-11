@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
+import uuid
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable
 
 from papertool.models import PaperRecord, SearchHit
 
@@ -114,15 +116,68 @@ class PaperDB:
                 FOREIGN KEY (paper_id) REFERENCES papers(id) ON DELETE CASCADE
             );
 
+            CREATE TABLE IF NOT EXISTS retrieval_shadow_log (
+                id TEXT PRIMARY KEY,
+                created_at TEXT NOT NULL,
+                query TEXT NOT NULL,
+                top_k INTEGER NOT NULL,
+                python_hits_json TEXT NOT NULL,
+                rust_hits_json TEXT NOT NULL,
+                overlap_at_k REAL NOT NULL,
+                py_ms REAL NOT NULL,
+                rust_ms REAL NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS topic_catalog (
+                topic_id TEXT PRIMARY KEY,
+                label TEXT NOT NULL UNIQUE,
+                source TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS paper_topic_scores (
+                paper_id TEXT NOT NULL,
+                topic_id TEXT NOT NULL,
+                score REAL NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (paper_id, topic_id),
+                FOREIGN KEY (paper_id) REFERENCES papers(id) ON DELETE CASCADE,
+                FOREIGN KEY (topic_id) REFERENCES topic_catalog(topic_id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS citation_communities (
+                paper_id TEXT PRIMARY KEY,
+                community_id TEXT NOT NULL,
+                score REAL NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (paper_id) REFERENCES papers(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS cluster_runs (
+                run_id TEXT PRIMARY KEY,
+                started_at TEXT NOT NULL,
+                ended_at TEXT,
+                status TEXT NOT NULL,
+                mode TEXT NOT NULL,
+                papers_processed INTEGER NOT NULL DEFAULT 0
+            );
+
             CREATE INDEX IF NOT EXISTS idx_papers_mtime ON papers(mtime);
+            CREATE INDEX IF NOT EXISTS idx_papers_arxiv_id ON papers(arxiv_id);
             CREATE INDEX IF NOT EXISTS idx_chunks_paper ON chunks(paper_id);
             CREATE INDEX IF NOT EXISTS idx_citations_source ON citations(source_paper_id);
             CREATE INDEX IF NOT EXISTS idx_citations_target ON citations(target_paper_id);
             CREATE INDEX IF NOT EXISTS idx_queue_status ON reading_queue(status);
             CREATE INDEX IF NOT EXISTS idx_review_due ON review_cards(next_due_at);
+            CREATE INDEX IF NOT EXISTS idx_topic_label ON topic_catalog(label);
+            CREATE INDEX IF NOT EXISTS idx_paper_topic_paper ON paper_topic_scores(paper_id);
+            CREATE INDEX IF NOT EXISTS idx_paper_topic_topic ON paper_topic_scores(topic_id);
+            CREATE INDEX IF NOT EXISTS idx_comm_id ON citation_communities(community_id);
+            CREATE INDEX IF NOT EXISTS idx_shadow_created ON retrieval_shadow_log(created_at);
             """
         )
         self._migrate_quiz_history()
+        self._seed_topic_catalog()
         self.bootstrap_queue()
         self.conn.commit()
 
@@ -133,6 +188,34 @@ class PaperDB:
     def _migrate_quiz_history(self) -> None:
         if not self._column_exists("quiz_history", "source"):
             self.conn.execute("ALTER TABLE quiz_history ADD COLUMN source TEXT NOT NULL DEFAULT 'daily'")
+
+    def _seed_topic_catalog(self) -> None:
+        topics = [
+            "moe",
+            "mamba",
+            "attention",
+            "transformer",
+            "quantization",
+            "rlhf",
+            "multimodal",
+            "diffusion",
+            "reasoning",
+            "agent",
+            "retrieval",
+            "inference",
+            "compiler",
+            "systems",
+            "alignment",
+        ]
+        now = utc_now_iso()
+        for label in topics:
+            self.conn.execute(
+                """
+                INSERT OR IGNORE INTO topic_catalog(topic_id, label, source, created_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (f"seed:{label}", label, "seed", now),
+            )
 
     def upsert_paper(self, paper: PaperRecord, full_text: str) -> None:
         payload = asdict(paper)
@@ -192,12 +275,41 @@ class PaperDB:
     def get_paper_by_path(self, path: str) -> sqlite3.Row | None:
         return self.conn.execute("SELECT * FROM papers WHERE path = ?", (path,)).fetchone()
 
-    def search_chunks(self, query: str, limit: int = 5) -> list[SearchHit]:
+    def get_paper_by_arxiv_id(self, arxiv_id: str) -> sqlite3.Row | None:
+        normalized = arxiv_id.strip().lower().replace("arxiv:", "")
+        base = re.sub(r"v\d+$", "", normalized)
+        return self.conn.execute(
+            """
+            SELECT * FROM papers
+            WHERE lower(arxiv_id) = ?
+               OR lower(arxiv_id) = ?
+               OR lower(arxiv_id) LIKE ?
+            ORDER BY ingested_at DESC
+            LIMIT 1
+            """,
+            (normalized, base, f"{base}v%"),
+        ).fetchone()
+
+    def set_paper_arxiv_id(self, paper_id: str, arxiv_id: str) -> None:
+        normalized = arxiv_id.strip().lower().replace("arxiv:", "")
+        base = re.sub(r"v\d+$", "", normalized)
+        self.conn.execute("UPDATE papers SET arxiv_id = ? WHERE id = ?", (base, paper_id))
+        self.conn.commit()
+
+    def search_chunks(self, query: str, limit: int = 5, paper_ids: list[str] | None = None) -> list[SearchHit]:
         sql = (
             "SELECT paper_id, snippet(chunk_fts, 0, '[', ']', ' ... ', 16) AS snippet, "
-            "bm25(chunk_fts) AS rank FROM chunk_fts WHERE chunk_fts MATCH ? ORDER BY rank LIMIT ?"
+            "bm25(chunk_fts) AS rank FROM chunk_fts WHERE chunk_fts MATCH ?"
         )
-        rows = self.conn.execute(sql, (query, limit)).fetchall()
+        params: list[object] = [query]
+        if paper_ids is not None:
+            if not paper_ids:
+                return []
+            sql += f" AND paper_id IN ({','.join('?' * len(paper_ids))})"
+            params.extend(paper_ids)
+        sql += " ORDER BY rank LIMIT ?"
+        params.append(limit)
+        rows = self.conn.execute(sql, params).fetchall()
         if not rows:
             return []
 
@@ -250,6 +362,284 @@ class PaperDB:
                 """
             ).fetchall()
         )
+
+    def log_retrieval_shadow(
+        self,
+        *,
+        query: str,
+        top_k: int,
+        python_hits_json: str,
+        rust_hits_json: str,
+        overlap_at_k: float,
+        py_ms: float,
+        rust_ms: float,
+    ) -> None:
+        self.conn.execute(
+            """
+            INSERT INTO retrieval_shadow_log(
+                id, created_at, query, top_k, python_hits_json, rust_hits_json, overlap_at_k, py_ms, rust_ms
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(uuid.uuid4()),
+                utc_now_iso(),
+                query,
+                int(top_k),
+                python_hits_json,
+                rust_hits_json,
+                float(overlap_at_k),
+                float(py_ms),
+                float(rust_ms),
+            ),
+        )
+        self.conn.commit()
+
+    def recent_shadow_logs(self, limit: int = 100) -> list[sqlite3.Row]:
+        return list(
+            self.conn.execute(
+                """
+                SELECT id, created_at, query, top_k, overlap_at_k, py_ms, rust_ms
+                FROM retrieval_shadow_log
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        )
+
+    def upsert_topic(self, label: str, source: str = "auto") -> str:
+        normalized = label.strip().lower()
+        if not normalized:
+            raise ValueError("topic label is required")
+        existing = self.conn.execute(
+            "SELECT topic_id FROM topic_catalog WHERE lower(label) = ?",
+            (normalized,),
+        ).fetchone()
+        if existing:
+            return str(existing["topic_id"])
+        topic_id = f"topic:{normalized}"
+        self.conn.execute(
+            """
+            INSERT INTO topic_catalog(topic_id, label, source, created_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (topic_id, normalized, source, utc_now_iso()),
+        )
+        self.conn.commit()
+        return topic_id
+
+    def topic_labels(self) -> list[str]:
+        rows = self.conn.execute("SELECT label FROM topic_catalog ORDER BY label ASC").fetchall()
+        return [str(row["label"]) for row in rows]
+
+    def clear_paper_topics(self) -> None:
+        self.conn.execute("DELETE FROM paper_topic_scores")
+        self.conn.commit()
+
+    def replace_paper_topics(self, paper_id: str, topics: list[tuple[str, float]]) -> None:
+        now = utc_now_iso()
+        self.conn.execute("DELETE FROM paper_topic_scores WHERE paper_id = ?", (paper_id,))
+        for topic_id, score in topics:
+            self.conn.execute(
+                """
+                INSERT OR REPLACE INTO paper_topic_scores(paper_id, topic_id, score, updated_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (paper_id, topic_id, float(score), now),
+            )
+        self.conn.commit()
+
+    def clear_communities(self) -> None:
+        self.conn.execute("DELETE FROM citation_communities")
+        self.conn.commit()
+
+    def set_paper_community(self, paper_id: str, community_id: str, score: float) -> None:
+        self.conn.execute(
+            """
+            INSERT OR REPLACE INTO citation_communities(paper_id, community_id, score, updated_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (paper_id, community_id, float(score), utc_now_iso()),
+        )
+        self.conn.commit()
+
+    def start_cluster_run(self, mode: str = "on_demand") -> str:
+        run_id = str(uuid.uuid4())
+        self.conn.execute(
+            """
+            INSERT INTO cluster_runs(run_id, started_at, status, mode, papers_processed)
+            VALUES (?, ?, 'running', ?, 0)
+            """,
+            (run_id, utc_now_iso(), mode),
+        )
+        self.conn.commit()
+        return run_id
+
+    def finish_cluster_run(self, run_id: str, *, status: str, papers_processed: int) -> None:
+        self.conn.execute(
+            """
+            UPDATE cluster_runs
+            SET ended_at = ?, status = ?, papers_processed = ?
+            WHERE run_id = ?
+            """,
+            (utc_now_iso(), status, int(papers_processed), run_id),
+        )
+        self.conn.commit()
+
+    def paper_ids_for_topic(self, label: str, limit: int = 2000) -> list[str]:
+        rows = self.conn.execute(
+            """
+            SELECT pts.paper_id
+            FROM paper_topic_scores pts
+            JOIN topic_catalog tc ON tc.topic_id = pts.topic_id
+            WHERE lower(tc.label) = lower(?)
+            ORDER BY pts.score DESC
+            LIMIT ?
+            """,
+            (label.strip(), limit),
+        ).fetchall()
+        return [str(row["paper_id"]) for row in rows]
+
+    def paper_ids_for_community(self, community_id: str, limit: int = 2000) -> list[str]:
+        rows = self.conn.execute(
+            """
+            SELECT paper_id
+            FROM citation_communities
+            WHERE community_id = ?
+            ORDER BY score DESC
+            LIMIT ?
+            """,
+            (community_id.strip(), limit),
+        ).fetchall()
+        return [str(row["paper_id"]) for row in rows]
+
+    def cluster_overview(self, cluster_type: str, limit: int = 50) -> list[sqlite3.Row]:
+        kind = cluster_type.strip().lower()
+        if kind == "topic":
+            return list(
+                self.conn.execute(
+                    """
+                    SELECT tc.label AS cluster_key, COUNT(*) AS paper_count, AVG(pts.score) AS avg_score
+                    FROM paper_topic_scores pts
+                    JOIN topic_catalog tc ON tc.topic_id = pts.topic_id
+                    GROUP BY tc.label
+                    ORDER BY paper_count DESC, avg_score DESC
+                    LIMIT ?
+                    """,
+                    (limit,),
+                ).fetchall()
+            )
+        if kind == "community":
+            return list(
+                self.conn.execute(
+                    """
+                    SELECT cc.community_id AS cluster_key, COUNT(*) AS paper_count, AVG(cc.score) AS avg_score
+                    FROM citation_communities cc
+                    GROUP BY cc.community_id
+                    ORDER BY paper_count DESC, avg_score DESC
+                    LIMIT ?
+                    """,
+                    (limit,),
+                ).fetchall()
+            )
+        raise ValueError("cluster_type must be topic or community")
+
+    def cluster_papers(self, *, topic: str | None = None, community_id: str | None = None, limit: int = 100) -> list[sqlite3.Row]:
+        if topic and community_id:
+            return list(
+                self.conn.execute(
+                    """
+                    SELECT p.id, p.title, p.path, p.ingested_at, pts.score AS cluster_score
+                    FROM papers p
+                    JOIN paper_topic_scores pts ON pts.paper_id = p.id
+                    JOIN topic_catalog tc ON tc.topic_id = pts.topic_id
+                    JOIN citation_communities cc ON cc.paper_id = p.id
+                    WHERE lower(tc.label) = lower(?) AND cc.community_id = ?
+                    ORDER BY cluster_score DESC, p.ingested_at DESC
+                    LIMIT ?
+                    """,
+                    (topic, community_id, limit),
+                ).fetchall()
+            )
+        if topic:
+            return list(
+                self.conn.execute(
+                    """
+                    SELECT p.id, p.title, p.path, p.ingested_at, pts.score AS cluster_score
+                    FROM papers p
+                    JOIN paper_topic_scores pts ON pts.paper_id = p.id
+                    JOIN topic_catalog tc ON tc.topic_id = pts.topic_id
+                    WHERE lower(tc.label) = lower(?)
+                    ORDER BY cluster_score DESC, p.ingested_at DESC
+                    LIMIT ?
+                    """,
+                    (topic, limit),
+                ).fetchall()
+            )
+        if community_id:
+            return list(
+                self.conn.execute(
+                    """
+                    SELECT p.id, p.title, p.path, p.ingested_at, cc.score AS cluster_score
+                    FROM papers p
+                    JOIN citation_communities cc ON cc.paper_id = p.id
+                    WHERE cc.community_id = ?
+                    ORDER BY cluster_score DESC, p.ingested_at DESC
+                    LIMIT ?
+                    """,
+                    (community_id, limit),
+                ).fetchall()
+            )
+        return []
+
+    def paper_rank_features(self, paper_ids: list[str]) -> dict[str, dict[str, Any]]:
+        if not paper_ids:
+            return {}
+        placeholders = ",".join("?" * len(paper_ids))
+        features: dict[str, dict[str, Any]] = {
+            paper_id: {"queue_status": "inbox", "citation_degree": 0.0, "topics": {}}
+            for paper_id in paper_ids
+        }
+        rows = self.conn.execute(
+            f"""
+            SELECT p.id,
+                   COALESCE(q.status, 'inbox') AS queue_status,
+                   COALESCE(c.degree, 0) AS citation_degree
+            FROM papers p
+            LEFT JOIN reading_queue q ON q.paper_id = p.id
+            LEFT JOIN (
+                SELECT paper_id, COUNT(*) AS degree
+                FROM (
+                    SELECT source_paper_id AS paper_id FROM citations
+                    UNION ALL
+                    SELECT target_paper_id AS paper_id FROM citations
+                ) z
+                GROUP BY paper_id
+            ) c ON c.paper_id = p.id
+            WHERE p.id IN ({placeholders})
+            """,
+            paper_ids,
+        ).fetchall()
+        for row in rows:
+            features[str(row["id"])] = {
+                "queue_status": str(row["queue_status"] or "inbox"),
+                "citation_degree": float(row["citation_degree"] or 0.0),
+                "topics": {},
+            }
+        topic_rows = self.conn.execute(
+            f"""
+            SELECT pts.paper_id, tc.label, pts.score
+            FROM paper_topic_scores pts
+            JOIN topic_catalog tc ON tc.topic_id = pts.topic_id
+            WHERE pts.paper_id IN ({placeholders})
+            """,
+            paper_ids,
+        ).fetchall()
+        for row in topic_rows:
+            pid = str(row["paper_id"])
+            entry = features.setdefault(pid, {"queue_status": "inbox", "citation_degree": 0.0, "topics": {}})
+            entry["topics"][str(row["label"])] = float(row["score"] or 0.0)
+        return features
 
     def log_qa(self, question: str, answer: str, paper_ids: list[str], channel: str = "mcp") -> None:
         self.conn.execute(

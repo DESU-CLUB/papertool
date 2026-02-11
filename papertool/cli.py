@@ -19,16 +19,21 @@ from papertool.planner import (
     validate_queue_status,
 )
 from papertool.quiz import generate_daily_quiz
-from papertool.retrieval import retrieve, synthesize_answer
+from papertool.retrieval import hits_to_dict, retrieve, synthesize_answer
+from papertool.rust_backend import build_clusters, build_index
 from papertool.url_import import import_result_to_dict, import_url_to_library
 
 app = typer.Typer(help="PaperTool CLI")
 graph_app = typer.Typer(help="Graph export commands")
 note_app = typer.Typer(help="Note commands")
 queue_app = typer.Typer(help="Reading queue commands")
+index_app = typer.Typer(help="Retrieval index commands")
+cluster_app = typer.Typer(help="Clustering commands")
 app.add_typer(graph_app, name="graph")
 app.add_typer(note_app, name="note")
 app.add_typer(queue_app, name="queue")
+app.add_typer(index_app, name="index")
+app.add_typer(cluster_app, name="cluster")
 
 
 def _db() -> tuple[PaperDB, object]:
@@ -45,6 +50,9 @@ def init(
     obsidian_vault: Optional[str] = typer.Option(None, help="Path to Obsidian vault"),
     obsidian_papers_dir: str = typer.Option("Papers", help="Folder for paper notes inside vault"),
     obsidian_daily_dir: str = typer.Option("Daily", help="Folder for daily notes inside vault"),
+    retrieval_backend: str = typer.Option("shadow", help="python|shadow|rust"),
+    rust_index_dir: Optional[str] = typer.Option(None, help="Path to Rust retrieval index dir"),
+    cluster_mode: str = typer.Option("on_demand", help="Cluster update mode"),
 ) -> None:
     root = Path.cwd()
     cfg = config_from_kwargs(
@@ -55,6 +63,9 @@ def init(
             "obsidian_vault": obsidian_vault,
             "obsidian_papers_dir": obsidian_papers_dir,
             "obsidian_daily_dir": obsidian_daily_dir,
+            "retrieval_backend": retrieval_backend,
+            "rust_index_dir": rust_index_dir,
+            "cluster_mode": cluster_mode,
         },
     )
     out = dump_config(cfg)
@@ -90,14 +101,45 @@ def list(limit: int = typer.Option(100, help="Maximum papers to print")) -> None
 
 
 @app.command()
+def search(
+    query: str = typer.Argument(..., help="Search query"),
+    top_k: int = typer.Option(6, help="Number of passages to retrieve"),
+    topic: Optional[str] = typer.Option(None, help="Optional topic filter label"),
+    community_id: Optional[str] = typer.Option(None, help="Optional citation community filter"),
+) -> None:
+    db, cfg = _db()
+    try:
+        hits = retrieve(
+            db,
+            query,
+            top_k=top_k,
+            topic=topic,
+            community_id=community_id,
+            config=cfg,
+        )
+        typer.echo(json.dumps(hits_to_dict(hits), ensure_ascii=True))
+    finally:
+        db.close()
+
+
+@app.command()
 def ask(
     question: str = typer.Argument(..., help="Question about your paper library"),
     top_k: int = typer.Option(6, help="Number of passages to retrieve"),
+    topic: Optional[str] = typer.Option(None, help="Optional topic filter label"),
+    community_id: Optional[str] = typer.Option(None, help="Optional citation community filter"),
     save_notes: bool = typer.Option(True, "--save-notes/--no-save-notes", help="Persist Q&A in Obsidian"),
 ) -> None:
     db, cfg = _db()
     try:
-        hits = retrieve(db, question, top_k=top_k)
+        hits = retrieve(
+            db,
+            question,
+            top_k=top_k,
+            topic=topic,
+            community_id=community_id,
+            config=cfg,
+        )
         answer = synthesize_answer(question, hits)
         paper_ids = list(dict.fromkeys(hit.paper_id for hit in hits))
         db.log_qa(question, answer, paper_ids=paper_ids, channel="cli")
@@ -281,6 +323,88 @@ def queue_set(
         status_value = validate_queue_status(status)
         db.queue_set_status(paper_id, status_value, priority=priority)
         typer.echo(f"Updated queue: {paper_id} -> {status_value}")
+    finally:
+        db.close()
+
+
+@index_app.command("build")
+def index_build() -> None:
+    db, cfg = _db()
+    try:
+        result = build_index(db, cfg.rust_index_dir)
+        typer.echo(json.dumps(result, ensure_ascii=True))
+    finally:
+        db.close()
+
+
+@index_app.command("refresh")
+def index_refresh(paper_id: Optional[str] = typer.Option(None, help="Optional single paper ID to refresh")) -> None:
+    db, cfg = _db()
+    try:
+        result = build_index(db, cfg.rust_index_dir, paper_id=paper_id)
+        typer.echo(json.dumps(result, ensure_ascii=True))
+    finally:
+        db.close()
+
+
+@cluster_app.command("build")
+def cluster_build() -> None:
+    db, cfg = _db()
+    try:
+        result = build_clusters(db, cfg.rust_index_dir)
+        typer.echo(json.dumps(result, ensure_ascii=True))
+    finally:
+        db.close()
+
+
+@cluster_app.command("list")
+def cluster_list(
+    type: str = typer.Option("topic", "--type", help="topic|community"),
+    limit: int = typer.Option(50, help="Maximum rows"),
+) -> None:
+    db, _cfg = _db()
+    try:
+        rows = db.cluster_overview(type, limit=max(1, limit))
+        for row in rows:
+            typer.echo(
+                json.dumps(
+                    {
+                        "cluster_key": row["cluster_key"],
+                        "paper_count": row["paper_count"],
+                        "avg_score": row["avg_score"],
+                    },
+                    ensure_ascii=True,
+                )
+            )
+        typer.echo(f"Total: {len(rows)}")
+    finally:
+        db.close()
+
+
+@cluster_app.command("papers")
+def cluster_papers(
+    topic: Optional[str] = typer.Option(None, help="Topic label"),
+    community: Optional[str] = typer.Option(None, "--community", help="Community ID"),
+    limit: int = typer.Option(100, help="Maximum rows"),
+) -> None:
+    if not topic and not community:
+        raise typer.BadParameter("provide --topic or --community")
+    db, _cfg = _db()
+    try:
+        rows = db.cluster_papers(topic=topic, community_id=community, limit=max(1, limit))
+        for row in rows:
+            typer.echo(
+                json.dumps(
+                    {
+                        "id": row["id"],
+                        "title": row["title"],
+                        "path": row["path"],
+                        "cluster_score": row["cluster_score"],
+                    },
+                    ensure_ascii=True,
+                )
+            )
+        typer.echo(f"Total: {len(rows)}")
     finally:
         db.close()
 

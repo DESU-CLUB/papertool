@@ -25,9 +25,44 @@ PaperTool is a local-first learning system for research papers with:
 ## Install
 
 ```bash
-python3 -m venv .venv
+uv venv --allow-existing .venv --python python3
 source .venv/bin/activate
-pip install -e .[dev]
+uv pip install -e '.[dev]'
+```
+
+## Run It (Quickstart)
+
+```bash
+# 1) Activate and install
+source .venv/bin/activate
+uv pip install -e '.[dev]'
+
+# 2) Initialize config
+papertool init --library-dir ./library --db-path ./.papertool/papertool.db
+
+# 3) Import at least one resource
+papertool import-url "https://arxiv.org/abs/2205.14135"
+
+# 4) Plan today and start reading flow
+papertool today --count 3
+papertool paper-of-day --quiz
+
+# 5) After reading, mark done and answer quiz
+papertool complete-reading --paper-id <paper_id> --quiz-count 3
+papertool submit-answer --question-id <question_id> --answer "..." --score 0.7
+papertool review-due --count 5
+```
+
+If you want agent integration, run:
+
+```bash
+papertool mcp-serve
+```
+
+If you want browser capture, run:
+
+```bash
+papertool bridge --host 127.0.0.1 --port 17345
 ```
 
 ## Configure
@@ -38,10 +73,18 @@ Create config:
 papertool init \
   --library-dir ./library \
   --db-path ./.papertool/papertool.db \
-  --obsidian-vault /absolute/path/to/your/ObsidianVault
+  --obsidian-vault /absolute/path/to/your/ObsidianVault \
+  --retrieval-backend shadow \
+  --rust-index-dir ./.papertool/index/v1 \
+  --cluster-mode on_demand
 ```
 
 This writes `papertool.toml`.
+
+Key config flags:
+- `retrieval_backend = "python" | "shadow" | "rust"`
+- `rust_index_dir = "/absolute/or/relative/path"`
+- `cluster_mode = "on_demand"`
 
 ## Usage
 
@@ -61,6 +104,24 @@ Ask question:
 
 ```bash
 papertool ask "What are the key differences between diffusion and autoregressive models?"
+papertool ask "How does MoE routing work?" --topic moe
+```
+
+Search passages directly:
+
+```bash
+papertool search "flash attention io aware" --top-k 8
+papertool search "state space" --community comm:0
+```
+
+Build retrieval index and clusters:
+
+```bash
+papertool index build
+papertool index refresh --paper-id <paper_id>
+papertool cluster build
+papertool cluster list --type topic
+papertool cluster papers --topic attention
 ```
 
 Generate quiz:
@@ -124,13 +185,17 @@ papertool mcp-serve
 
 Available MCP tools:
 - `list_papers(limit=100)`
-- `search_papers(query, top_k=6)`
-- `ask_papers(question, top_k=6, save_to_obsidian=true)`
+- `search_papers(query, top_k=6, topic=null, community_id=null)`
+- `ask_papers(question, top_k=6, save_to_obsidian=true, topic=null, community_id=null)`
 - `get_daily_quiz(count=5)`
 - `submit_quiz_answer(question_id, user_answer, score=null)`
 - `citation_graph()`
 - `import_resource(url, title=null, context_text=null)`
 - `import_resources(urls)`
+- `build_retrieval_index(paper_id=null)`
+- `build_clusters_index()`
+- `clusters_overview(type=\"topic\"|\"community\", limit=50)`
+- `cluster_papers(topic=null, community_id=null, limit=100)`
 - `queue_overview(status=null, limit=50)`
 - `queue_set(paper_id, status, priority=null)`
 - `plan_today(max_items=3)`
@@ -171,6 +236,10 @@ SQLite DB tables:
 - `quiz_history` (quiz prompts + responses)
 - `reading_queue` (inbox/today/next/later/done planning state)
 - `review_cards` (spaced-review schedule and intervals)
+- `retrieval_shadow_log` (Python vs Rust shadow comparisons)
+- `topic_catalog` + `paper_topic_scores` (overlapping topic clusters)
+- `citation_communities` (citation graph communities)
+- `cluster_runs` (cluster build run history)
 
 ## Chrome extension integration
 
@@ -180,7 +249,8 @@ A starter Chrome extension is included at `chrome-extension/` that sends the cur
 2. Open `chrome://extensions`.
 3. Enable Developer Mode.
 4. Click \"Load unpacked\" and choose `chrome-extension/`.
-5. Click the extension on any paper/repo/x/web page and press \"Capture Current Tab\".
+5. Open arXiv, Google Search, or Google Scholar; inline `Save to PaperTool` buttons appear beside paper-like result titles.
+6. (Optional) Use extension popup to capture any current tab URL.
 
 The resource is downloaded/converted into `library/captures/` and ingested automatically.
 

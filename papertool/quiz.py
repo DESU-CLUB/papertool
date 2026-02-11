@@ -9,6 +9,7 @@ from typing import Any
 
 from papertool.db import PaperDB
 from papertool.models import QuizQuestion
+from papertool.retrieval import rank_quiz_papers
 
 
 def _parse_iso(value: str | None) -> datetime | None:
@@ -114,12 +115,31 @@ def generate_daily_quiz(db: PaperDB, count: int = 5) -> list[QuizQuestion]:
     if not rows and not recycled_rows:
         return []
 
+    ranked_candidates = rank_quiz_papers(
+        db,
+        count=max(count * 5, 25),
+        include_queue_boost=True,
+        diversify_by_topic=True,
+    )
+    activity_by_id = {str(row["id"]): row for row in rows}
+
     candidates: list[dict[str, Any]] = []
-    for row in rows:
-        paper = db.get_paper(row["id"])
+    ranked_ids: list[str] = [str(item["paper_id"]) for item in ranked_candidates]
+    if not ranked_ids:
+        ranked_ids = list(activity_by_id.keys())
+
+    for paper_id in ranked_ids:
+        row = activity_by_id.get(paper_id)
+        if not row:
+            continue
+        paper = db.get_paper(paper_id)
         if not paper:
             continue
-        base_weight = recency_weight(row["ingested_at"], now=now)
+        ranked_score = next(
+            (float(item["score"]) for item in ranked_candidates if str(item["paper_id"]) == paper_id),
+            recency_weight(str(row["ingested_at"]), now=now),
+        )
+        base_weight = max(ranked_score, 0.0001)
         quiz_count = int(row["quiz_count"] or 0)
         score = float(row["avg_score"] or 0.0)
 

@@ -11,8 +11,6 @@ from papertool.url_import import import_result_to_dict, import_url_to_library
 def run_bridge_server(host: str = "127.0.0.1", port: int = 17345) -> None:
     cfg = load_config()
     cfg.library_dir.mkdir(parents=True, exist_ok=True)
-    db = PaperDB(cfg.db_path)
-    db.initialize()
 
     class BridgeHandler(BaseHTTPRequestHandler):
         def log_message(self, format: str, *args: object) -> None:
@@ -62,7 +60,10 @@ def run_bridge_server(host: str = "127.0.0.1", port: int = 17345) -> None:
                 self._json(400, {"ok": False, "error": "url is required"})
                 return
 
+            db: PaperDB | None = None
             try:
+                db = PaperDB(cfg.db_path)
+                db.initialize()
                 result = import_url_to_library(
                     db,
                     cfg.library_dir,
@@ -70,7 +71,13 @@ def run_bridge_server(host: str = "127.0.0.1", port: int = 17345) -> None:
                     page_title=payload.get("title"),
                     context_text=payload.get("context_text") or payload.get("selection"),
                 )
+                db.close()
             except Exception as exc:
+                try:
+                    if db is not None:
+                        db.close()
+                except Exception:
+                    pass
                 self._json(500, {"ok": False, "error": str(exc)})
                 return
 
@@ -84,4 +91,3 @@ def run_bridge_server(host: str = "127.0.0.1", port: int = 17345) -> None:
         pass
     finally:
         server.server_close()
-        db.close()

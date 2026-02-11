@@ -20,6 +20,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
   "pytest>=8.2.0",
+  "maturin>=1.7.0",
 ]
 
 [project.scripts]
@@ -34,3 +35,7 @@ include = ["papertool*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.maturin]
+manifest-path = "rust/papertool_retriever/Cargo.toml"
+module-name = "papertool_retriever_native"

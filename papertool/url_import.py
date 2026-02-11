@@ -64,10 +64,10 @@ def detect_resource_kind(url: str) -> str:
     host = parsed.netloc.lower()
     path = parsed.path.lower()
 
+    if host in {"arxiv.org", "www.arxiv.org"} and (path.startswith("/abs/") or path.startswith("/pdf/")):
+        return "arxiv"
     if path.endswith(".pdf"):
         return "pdf"
-    if host in {"arxiv.org", "www.arxiv.org"} and path.startswith("/abs/"):
-        return "arxiv"
     if host in {"github.com", "www.github.com"} and _github_repo_ref(url) is not None:
         return "github"
     if host in {"x.com", "www.x.com", "twitter.com", "www.twitter.com"} and "/status/" in path:
@@ -76,17 +76,49 @@ def detect_resource_kind(url: str) -> str:
 
 
 def arxiv_abs_to_pdf(url: str) -> str:
-    parsed = urlparse(url)
-    if not parsed.path.startswith("/abs/"):
+    arxiv_id = extract_arxiv_id_from_url(url)
+    if not arxiv_id:
         return url
-    paper_id = parsed.path.removeprefix("/abs/").split("/")[0]
-    return f"https://arxiv.org/pdf/{paper_id}.pdf"
+    return f"https://arxiv.org/pdf/{arxiv_id}.pdf"
+
+
+def canonicalize_arxiv_id(arxiv_id: str) -> str:
+    normalized = arxiv_id.strip().lower().replace("arxiv:", "")
+    return re.sub(r"v\d+$", "", normalized)
+
+
+def extract_arxiv_id_from_url(url: str) -> str | None:
+    parsed = urlparse(url)
+    host = parsed.netloc.lower()
+    if host not in {"arxiv.org", "www.arxiv.org"}:
+        return None
+
+    path = parsed.path.strip()
+    if path.startswith("/abs/"):
+        raw = path.removeprefix("/abs/")
+    elif path.startswith("/pdf/"):
+        raw = path.removeprefix("/pdf/")
+    else:
+        return None
+
+    raw = raw.strip("/")
+    if raw.endswith(".pdf"):
+        raw = raw[:-4]
+    if not raw:
+        return None
+    return raw
 
 
 def _sanitize_filename(name: str) -> str:
     value = re.sub(r"[^A-Za-z0-9._ -]+", "", name).strip()
     value = re.sub(r"\s+", "_", value)
     return value[:120] or "resource"
+
+
+def _clean_title(title: str) -> str:
+    compact = re.sub(r"\s+", " ", (title or "")).strip()
+    compact = re.sub(r"^(title|abstract)\s*:\s*", "", compact, flags=re.IGNORECASE).strip()
+    return compact
 
 
 def _write_unique_bytes(root: Path, stem: str, suffix: str, content: bytes) -> Path:
@@ -274,18 +306,41 @@ def import_url_to_library(
     normalized = normalize_input_url(url)
     kind = detect_resource_kind(normalized)
     captures_root = library_dir / "captures"
+    clean_page_title = _clean_title(page_title or "") if page_title else None
 
     if kind in {"pdf", "arxiv"}:
         pdf_url = arxiv_abs_to_pdf(normalized) if kind == "arxiv" else normalized
+        if kind == "arxiv":
+            arxiv_id = extract_arxiv_id_from_url(normalized)
+            if arxiv_id:
+                canonical = canonicalize_arxiv_id(arxiv_id)
+                existing = db.get_paper_by_arxiv_id(canonical)
+                if existing:
+                    return ImportedResource(
+                        url=normalized,
+                        resource_kind=kind,
+                        saved_path=str(existing["path"]),
+                        title=canonical,
+                        paper_id=str(existing["id"]),
+                    )
         pdf_bytes, _ = _http_get(pdf_url, accept="application/pdf,*/*")
-        title_hint = page_title or Path(urlparse(pdf_url).path).stem or "paper"
+        if kind == "arxiv":
+            arxiv_id = extract_arxiv_id_from_url(normalized) or Path(urlparse(pdf_url).path).stem
+            arxiv_id = canonicalize_arxiv_id(arxiv_id)
+            title_hint = arxiv_id or "paper"
+        else:
+            title_hint = clean_page_title or Path(urlparse(pdf_url).path).stem or "paper"
         saved = _write_unique_bytes(captures_root / "papers", title_hint, ".pdf", pdf_bytes)
         paper_id = _ingest_saved_file(db, saved)
+        if paper_id and kind == "arxiv":
+            arxiv_id = extract_arxiv_id_from_url(normalized)
+            if arxiv_id:
+                db.set_paper_arxiv_id(paper_id, canonicalize_arxiv_id(arxiv_id))
         return ImportedResource(
             url=normalized,
             resource_kind=kind,
             saved_path=str(saved.resolve()),
-            title=page_title or title_hint,
+            title=title_hint,
             paper_id=paper_id,
         )
 
@@ -314,7 +369,7 @@ def import_url_to_library(
     if context_text:
         markdown += "\n## Capture Context\n\n" + context_text.strip() + "\n"
 
-    file_title = page_title or title
+    file_title = clean_page_title or title
     saved = _write_unique_text(captures_root / "web", file_title, ".md", markdown)
     paper_id = _ingest_saved_file(db, saved)
     return ImportedResource(
