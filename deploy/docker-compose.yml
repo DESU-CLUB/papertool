@@ -1,0 +1,79 @@
+version: "3.9"
+
+services:
+  couchdb:
+    image: couchdb:3.3
+    restart: unless-stopped
+    environment:
+      COUCHDB_USER: ${COUCHDB_USER}
+      COUCHDB_PASSWORD: ${COUCHDB_PASSWORD}
+    ports:
+      - "${TAILSCALE_BIND_IP:-127.0.0.1}:5984:5984"
+    volumes:
+      - couchdb_data:/opt/couchdb/data
+
+  minio:
+    image: minio/minio:RELEASE.2025-01-20T14-49-07Z
+    restart: unless-stopped
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    command: server /data --console-address ":9001"
+    ports:
+      - "${TAILSCALE_BIND_IP:-127.0.0.1}:9000:9000"
+      - "${TAILSCALE_BIND_IP:-127.0.0.1}:9001:9001"
+    volumes:
+      - minio_data:/data
+
+  papertool-api:
+    image: python:3.12-slim
+    restart: unless-stopped
+    working_dir: /workspace
+    depends_on:
+      - couchdb
+      - minio
+    volumes:
+      - ..:/workspace
+      - papertool_library:/workspace/library
+      - papertool_state:/workspace/.papertool
+    environment:
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+    command: >
+      sh -lc "pip install -e . &&
+      papertool init
+      --library-dir /workspace/library
+      --db-path /workspace/.papertool/papertool.db
+      --storage-backend couch
+      --couchdb-url http://${COUCHDB_USER}:${COUCHDB_PASSWORD}@couchdb:5984
+      --couchdb-db-meta papertool_meta
+      --couchdb-db-events papertool_events
+      --couchdb-db-jobs papertool_jobs
+      --remote-api-token ${PAPERTOOL_REMOTE_API_TOKEN}
+      --minio-endpoint http://minio:9000
+      --minio-bucket papertool-files
+      --minio-access-key ${MINIO_ROOT_USER}
+      --minio-secret-key ${MINIO_ROOT_PASSWORD}
+      && papertool remote serve --host 0.0.0.0 --port 18443"
+    ports:
+      - "${TAILSCALE_BIND_IP:-127.0.0.1}:18443:18443"
+
+  papertool-worker:
+    image: python:3.12-slim
+    restart: unless-stopped
+    working_dir: /workspace
+    depends_on:
+      - papertool-api
+    volumes:
+      - ..:/workspace
+      - papertool_library:/workspace/library
+      - papertool_state:/workspace/.papertool
+    environment:
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+    command: >
+      sh -lc "pip install -e . && papertool remote worker --poll-interval-sec 5"
+
+volumes:
+  couchdb_data:
+  minio_data:
+  papertool_library:
+  papertool_state:

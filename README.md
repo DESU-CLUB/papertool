@@ -85,6 +85,11 @@ Key config flags:
 - `retrieval_backend = "python" | "shadow" | "rust"`
 - `rust_index_dir = "/absolute/or/relative/path"`
 - `cluster_mode = "on_demand"`
+- `storage_backend = "sqlite" | "hybrid" | "couch"`
+- `couchdb_url`, `couchdb_db_meta`, `couchdb_db_events`, `couchdb_db_jobs`
+- `remote_api_base_url`, `remote_api_token`
+- `minio_endpoint`, `minio_bucket`, `minio_access_key`, `minio_secret_key`
+- `sync_enabled`, `sync_pull_interval_sec`, `sync_push_interval_sec`
 
 ## Usage
 
@@ -167,6 +172,28 @@ Run local bridge server (for extension/app integrations):
 papertool bridge --host 127.0.0.1 --port 17345
 ```
 
+Run remote API and worker (for distributed tailnet captures/sync):
+
+```bash
+papertool remote serve --host 0.0.0.0 --port 18443
+papertool remote worker --poll-interval-sec 5
+papertool remote health
+papertool sync run
+papertool sync status
+```
+
+Migration helpers:
+
+```bash
+papertool migrate export-sqlite --output ./.papertool/migration-export.json
+papertool migrate import-couch --input ./.papertool/migration-export.json
+papertool migrate verify
+```
+
+For a Docker-based distributed deployment (CouchDB + MinIO + API + worker), see:
+- `deploy/docker-compose.yml`
+- `deploy/README.md` (includes full `spooky@ghost` setup runbook)
+
 Export graph:
 
 ```bash
@@ -243,7 +270,7 @@ SQLite DB tables:
 
 ## Chrome extension integration
 
-A starter Chrome extension is included at `chrome-extension/` that sends the current tab URL to your local bridge server.
+A starter Chrome extension is included at `chrome-extension/` that sends the current tab URL to your local bridge server or remote API.
 
 1. Start bridge server: `papertool bridge`.
 2. Open `chrome://extensions`.
@@ -251,6 +278,13 @@ A starter Chrome extension is included at `chrome-extension/` that sends the cur
 4. Click \"Load unpacked\" and choose `chrome-extension/`.
 5. Open arXiv, Google Search, or Google Scholar; inline `Save to PaperTool` buttons appear beside paper-like result titles.
 6. (Optional) Use extension popup to capture any current tab URL.
+7. For distributed mode, set popup endpoint to your Tailscale host, e.g. `http://ghost:18443`, and set Bearer token.
+
+Upload reliability:
+- Queue is durable in `chrome.storage.local`.
+- Retry policy is exponential backoff with jitter: 30s -> 60s -> 120s -> 240s -> 480s -> 900s -> 1800s.
+- Retries happen on network errors, `429`, and `5xx`.
+- Other `4xx` are marked terminal failures and surfaced in popup queue diagnostics.
 
 The resource is downloaded/converted into `library/captures/` and ingested automatically.
 
@@ -265,4 +299,9 @@ The resource is downloaded/converted into `library/captures/` and ingested autom
 
 ```bash
 pytest
+pytest -m integration -k spooky_access
 ```
+
+Integration note:
+- `tests/integration/test_spooky_access.py` runs `ssh spooky@ghost "curl .../v1/health"`.
+- If `spooky@ghost` is unreachable or requires interactive Tailscale SSH auth, it is skipped.

@@ -35,6 +35,10 @@ include = ["papertool*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "-m \"not integration\""
+markers = [
+  "integration: tests that require external infrastructure such as spooky@ghost",
+]
 
 [tool.maturin]
 manifest-path = "rust/papertool_retriever/Cargo.toml"

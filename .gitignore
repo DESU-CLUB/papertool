@@ -7,6 +7,8 @@ __pycache__/
 build/
 *.egg-info/
 .context/
+deploy/.env
+library/
 
 # Rust build artifacts
 rust/**/target/
