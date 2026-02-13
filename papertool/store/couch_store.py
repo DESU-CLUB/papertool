@@ -279,14 +279,23 @@ class CouchStore:
         base_url = (self.config.remote_api_base_url or "").strip().rstrip("/")
         if base_url:
             headers = {"Accept": "application/json"}
-            if self.config.remote_api_token:
-                headers["Authorization"] = f"Bearer {self.config.remote_api_token}"
+            token = (self.config.remote_api_token or "").strip()
+            if token:
+                headers["Authorization"] = f"Bearer {token}"
             req = Request(f"{base_url}/v1/health", headers=headers, method="GET")
             try:
                 with urlopen(req, timeout=15) as resp:
                     body = json.loads(resp.read().decode("utf-8"))
                     out["api"] = {"ok": True, "status": resp.status, "payload": body}
-            except (HTTPError, URLError, RuntimeError, ValueError) as exc:
+            except HTTPError as exc:
+                payload: dict[str, Any] | str = {}
+                try:
+                    raw = exc.read().decode("utf-8")
+                    payload = json.loads(raw) if raw else {}
+                except Exception:
+                    payload = str(exc)
+                out["api"] = {"ok": False, "status": exc.code, "error": str(exc), "payload": payload}
+            except (URLError, RuntimeError, ValueError) as exc:
                 out["api"] = {"ok": False, "error": str(exc)}
 
         out["ok"] = bool(out["couch"].get("ok") or out["api"].get("ok"))

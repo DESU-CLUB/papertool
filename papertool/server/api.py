@@ -24,6 +24,9 @@ def _is_tailscale_or_local(ip: str) -> bool:
         return False
     if addr.is_loopback:
         return True
+    # Docker bridge/NAT setups may surface private source IPs at the app layer.
+    if addr.is_private:
+        return True
     if isinstance(addr, ipaddress.IPv4Address):
         return addr in ipaddress.ip_network("100.64.0.0/10")
     return addr in ipaddress.ip_network("fd7a:115c:a1e0::/48")

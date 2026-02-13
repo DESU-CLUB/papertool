@@ -5,7 +5,7 @@ import json
 from dataclasses import dataclass
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote, urlparse
+from urllib.parse import quote, unquote, urlparse, urlunparse
 from urllib.request import Request, urlopen
 
 
@@ -19,15 +19,21 @@ class CouchClient:
     def __init__(self, base_url: str, timeout: int = 20) -> None:
         if not base_url:
             raise ValueError("couchdb_url is required")
-        self.base_url = base_url.rstrip("/")
+        raw_base_url = base_url.rstrip("/")
         self.timeout = timeout
-        parsed = urlparse(self.base_url)
+        parsed = urlparse(raw_base_url)
         self._auth_header: str | None = None
         if parsed.username:
-            user = parsed.username
-            pwd = parsed.password or ""
+            user = unquote(parsed.username)
+            pwd = unquote(parsed.password or "")
             token = base64.b64encode(f"{user}:{pwd}".encode("utf-8")).decode("ascii")
             self._auth_header = f"Basic {token}"
+            host = parsed.hostname or ""
+            if parsed.port is not None:
+                host = f"{host}:{parsed.port}"
+            parsed = parsed._replace(netloc=host)
+            raw_base_url = urlunparse(parsed)
+        self.base_url = raw_base_url.rstrip("/")
 
     def _request(
         self,
