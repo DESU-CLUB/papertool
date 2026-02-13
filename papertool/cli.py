@@ -135,8 +135,8 @@ def ingest(folder: Optional[str] = typer.Option(None, help="Paper folder; defaul
         _close_db(db)
 
 
-@app.command()
-def list(limit: int = typer.Option(100, help="Maximum papers to print")) -> None:
+@app.command("list")
+def list_papers(limit: int = typer.Option(100, help="Maximum papers to print")) -> None:
     db, _cfg = _db()
     try:
         rows = db.list_papers()[:limit]
