@@ -177,6 +177,7 @@ Run remote API and worker (for distributed tailnet captures/sync):
 ```bash
 papertool remote serve --host 0.0.0.0 --port 18443
 papertool remote worker --poll-interval-sec 5
+papertool sync daemon --pull-interval-sec 30
 papertool remote health
 papertool sync run
 papertool sync status

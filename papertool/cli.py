@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -478,6 +479,29 @@ def sync_status() -> None:
         store.initialize()
         result = store.sync_status()
         typer.echo(json.dumps(result, ensure_ascii=True))
+    finally:
+        store.close()
+
+
+@sync_app.command("daemon")
+def sync_daemon(
+    pull_interval_sec: int = typer.Option(30, help="Auto-pull interval in seconds"),
+) -> None:
+    cfg = load_config()
+    store = create_store(cfg)
+    interval = max(1, pull_interval_sec)
+    try:
+        store.initialize()
+        typer.echo(f"sync daemon running (pull every {interval}s)")
+        while True:
+            try:
+                result = store.sync_run(pull=True, push=False)
+                typer.echo(json.dumps(result, ensure_ascii=True))
+            except Exception as exc:
+                typer.echo(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=True))
+            time.sleep(interval)
+    except KeyboardInterrupt:
+        typer.echo("sync daemon stopped")
     finally:
         store.close()
 

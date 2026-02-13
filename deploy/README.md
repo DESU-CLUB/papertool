@@ -5,6 +5,7 @@ This sets up your shared PaperTool backend on your tailnet:
 - MinIO (`papertool-files`)
 - PaperTool API (`/v1/*`)
 - PaperTool worker (processes queued captures)
+- PaperTool sync daemon (auto-pulls remote changes into server cache)
 
 ## 1) Prerequisites on `spooky@ghost`
 
@@ -151,7 +152,7 @@ docker compose --env-file deploy/.env -f deploy/docker-compose.yml up -d --build
 View logs:
 
 ```bash
-docker compose --env-file deploy/.env -f deploy/docker-compose.yml logs -f papertool-api papertool-worker
+docker compose --env-file deploy/.env -f deploy/docker-compose.yml logs -f papertool-api papertool-worker papertool-sync
 ```
 
 Stop:
