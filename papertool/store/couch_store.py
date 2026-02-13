@@ -94,6 +94,42 @@ class CouchStore:
             doc_id = f"topic_catalog:{row['topic_id']}"
             docs.append({"_id": doc_id, "type": "topic_catalog", "updated_at": row.get("created_at") or _utc_now_iso(), "data": row})
 
+        for row in self._table_rows("goal_settings"):
+            doc_id = f"goal_settings:{row['id']}"
+            docs.append({"_id": doc_id, "type": "goal_settings", "updated_at": row.get("updated_at") or _utc_now_iso(), "data": row})
+
+        for row in self._table_rows("daily_progress"):
+            doc_id = f"daily_progress:{row['day_key']}"
+            docs.append({"_id": doc_id, "type": "daily_progress", "updated_at": row.get("computed_at") or _utc_now_iso(), "data": row})
+
+        for row in self._table_rows("daily_qualified_papers"):
+            doc_id = f"daily_qualified_papers:{row['day_key']}:{row['paper_id']}"
+            docs.append({"_id": doc_id, "type": "daily_qualified_papers", "updated_at": row.get("qualified_at") or _utc_now_iso(), "data": row})
+
+        for row in self._table_rows("paper_medals"):
+            doc_id = f"paper_medals:{row['paper_id']}"
+            docs.append({"_id": doc_id, "type": "paper_medals", "updated_at": row.get("updated_at") or _utc_now_iso(), "data": row})
+
+        for row in self._table_rows("paper_repo_links"):
+            doc_id = f"paper_repo_links:{row['id']}"
+            docs.append({"_id": doc_id, "type": "paper_repo_links", "updated_at": row.get("added_at") or _utc_now_iso(), "data": row})
+
+        for row in self._table_rows("medal_events"):
+            doc_id = f"medal_events:{row['id']}"
+            docs.append({"_id": doc_id, "type": "medal_events", "updated_at": row.get("created_at") or _utc_now_iso(), "data": row})
+
+        for row in self._table_rows("resources"):
+            doc_id = f"resource:{row['id']}"
+            docs.append({"_id": doc_id, "type": "resource", "updated_at": row.get("updated_at") or _utc_now_iso(), "data": row})
+
+        for row in self._table_rows("resource_topics"):
+            doc_id = f"resource_topic:{row['resource_id']}:{row['topic_id']}"
+            docs.append({"_id": doc_id, "type": "resource_topic", "updated_at": row.get("updated_at") or _utc_now_iso(), "data": row})
+
+        for row in self._table_rows("paper_resource_links"):
+            doc_id = f"paper_resource_link:{row['id']}"
+            docs.append({"_id": doc_id, "type": "paper_resource_link", "updated_at": row.get("created_at") or _utc_now_iso(), "data": row})
+
         return docs
 
     def _insert_row(self, table: str, data: dict[str, Any], columns: list[str]) -> None:
@@ -195,6 +231,69 @@ class CouchStore:
                 for data in by_type["qa_log"]:
                     self._insert_row("qa_log", data, cols)
                 stats["qa_log"] = len(by_type["qa_log"])
+
+            if by_type.get("goal_settings"):
+                self.db.conn.execute("DELETE FROM goal_settings")
+                cols = self._table_columns("goal_settings")
+                for data in by_type["goal_settings"]:
+                    self._insert_row("goal_settings", data, cols)
+                stats["goal_settings"] = len(by_type["goal_settings"])
+
+            if by_type.get("daily_progress"):
+                self.db.conn.execute("DELETE FROM daily_progress")
+                cols = self._table_columns("daily_progress")
+                for data in by_type["daily_progress"]:
+                    self._insert_row("daily_progress", data, cols)
+                stats["daily_progress"] = len(by_type["daily_progress"])
+
+            if by_type.get("daily_qualified_papers"):
+                self.db.conn.execute("DELETE FROM daily_qualified_papers")
+                cols = self._table_columns("daily_qualified_papers")
+                for data in by_type["daily_qualified_papers"]:
+                    self._insert_row("daily_qualified_papers", data, cols)
+                stats["daily_qualified_papers"] = len(by_type["daily_qualified_papers"])
+
+            if by_type.get("paper_medals"):
+                self.db.conn.execute("DELETE FROM paper_medals")
+                cols = self._table_columns("paper_medals")
+                for data in by_type["paper_medals"]:
+                    self._insert_row("paper_medals", data, cols)
+                stats["paper_medals"] = len(by_type["paper_medals"])
+
+            if by_type.get("paper_repo_links"):
+                self.db.conn.execute("DELETE FROM paper_repo_links")
+                cols = self._table_columns("paper_repo_links")
+                for data in by_type["paper_repo_links"]:
+                    self._insert_row("paper_repo_links", data, cols)
+                stats["paper_repo_links"] = len(by_type["paper_repo_links"])
+
+            if by_type.get("medal_events"):
+                self.db.conn.execute("DELETE FROM medal_events")
+                cols = self._table_columns("medal_events")
+                for data in by_type["medal_events"]:
+                    self._insert_row("medal_events", data, cols)
+                stats["medal_events"] = len(by_type["medal_events"])
+
+            if by_type.get("resource"):
+                self.db.conn.execute("DELETE FROM resources")
+                cols = self._table_columns("resources")
+                for data in by_type["resource"]:
+                    self._insert_row("resources", data, cols)
+                stats["resources"] = len(by_type["resource"])
+
+            if by_type.get("resource_topic"):
+                self.db.conn.execute("DELETE FROM resource_topics")
+                cols = self._table_columns("resource_topics")
+                for data in by_type["resource_topic"]:
+                    self._insert_row("resource_topics", data, cols)
+                stats["resource_topics"] = len(by_type["resource_topic"])
+
+            if by_type.get("paper_resource_link"):
+                self.db.conn.execute("DELETE FROM paper_resource_links")
+                cols = self._table_columns("paper_resource_links")
+                for data in by_type["paper_resource_link"]:
+                    self._insert_row("paper_resource_links", data, cols)
+                stats["paper_resource_links"] = len(by_type["paper_resource_link"])
 
             self.db.conn.commit()
         finally:

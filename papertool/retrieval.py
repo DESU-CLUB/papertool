@@ -104,6 +104,17 @@ def _resolve_paper_filter(db: PaperDB, topic: str | None, community_id: str | No
     return [paper_id for paper_id in topic_ids if paper_id in set(community_ids)]
 
 
+def _merge_paper_filters(primary: list[str] | None, secondary: list[str] | None) -> list[str] | None:
+    if primary is None:
+        return secondary
+    if secondary is None:
+        return primary
+    if not primary or not secondary:
+        return []
+    secondary_set = set(secondary)
+    return [paper_id for paper_id in primary if paper_id in secondary_set]
+
+
 def _python_hybrid_retrieve(
     db: PaperDB,
     question: str,
@@ -111,9 +122,13 @@ def _python_hybrid_retrieve(
     *,
     topic: str | None = None,
     community_id: str | None = None,
+    paper_ids: list[str] | None = None,
 ) -> list[SearchHit]:
     query = fts_query_from_text(question)
-    paper_filter = _resolve_paper_filter(db, topic=topic, community_id=community_id)
+    paper_filter = _merge_paper_filters(
+        _resolve_paper_filter(db, topic=topic, community_id=community_id),
+        paper_ids,
+    )
 
     raw_limit = max(top_k * 12, top_k)
     raw_hits = db.search_chunks(query=query, limit=raw_limit, paper_ids=paper_filter)
@@ -195,12 +210,31 @@ def retrieve(
     topic: str | None = None,
     community_id: str | None = None,
     config: PaperToolConfig | None = None,
+    paper_ids: list[str] | None = None,
 ) -> list[SearchHit]:
     cfg = config or load_config()
     backend = _resolve_backend(cfg)
 
     if backend == "python":
-        return _python_hybrid_retrieve(db, question, top_k=top_k, topic=topic, community_id=community_id)
+        return _python_hybrid_retrieve(
+            db,
+            question,
+            top_k=top_k,
+            topic=topic,
+            community_id=community_id,
+            paper_ids=paper_ids,
+        )
+
+    # Rust backend does not yet support explicit per-paper filters in v1.
+    if paper_ids is not None:
+        return _python_hybrid_retrieve(
+            db,
+            question,
+            top_k=top_k,
+            topic=topic,
+            community_id=community_id,
+            paper_ids=paper_ids,
+        )
 
     if backend == "rust":
         try:
@@ -213,11 +247,25 @@ def retrieve(
                 community_id=community_id,
             )
         except RustBackendUnavailable:
-            return _python_hybrid_retrieve(db, question, top_k=top_k, topic=topic, community_id=community_id)
+            return _python_hybrid_retrieve(
+                db,
+                question,
+                top_k=top_k,
+                topic=topic,
+                community_id=community_id,
+                paper_ids=paper_ids,
+            )
 
     # shadow mode: return Python result but capture parity telemetry against Rust.
     py_start = time.perf_counter()
-    py_hits = _python_hybrid_retrieve(db, question, top_k=top_k, topic=topic, community_id=community_id)
+    py_hits = _python_hybrid_retrieve(
+        db,
+        question,
+        top_k=top_k,
+        topic=topic,
+        community_id=community_id,
+        paper_ids=paper_ids,
+    )
     py_ms = (time.perf_counter() - py_start) * 1000.0
 
     rust_hits: list[SearchHit] = []

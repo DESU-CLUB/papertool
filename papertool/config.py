@@ -37,6 +37,11 @@ class PaperToolConfig:
     sync_enabled: bool = True
     sync_pull_interval_sec: int = 30
     sync_push_interval_sec: int = 30
+    daily_goal: int = 1
+    goal_timezone: str = "America/Los_Angeles"
+    ask_confirmation_mode: str = "session"
+    ask_session_ttl_sec: int = 1800
+    ask_cli_auto_session: bool = True
 
 
 def _resolve_path(path_value: str | None, root: Path) -> Path | None:
@@ -97,6 +102,11 @@ def load_config(config_path: Path | None = None) -> PaperToolConfig:
         sync_enabled=bool(raw.get("sync_enabled", cfg.sync_enabled)),
         sync_pull_interval_sec=int(raw.get("sync_pull_interval_sec") or cfg.sync_pull_interval_sec),
         sync_push_interval_sec=int(raw.get("sync_push_interval_sec") or cfg.sync_push_interval_sec),
+        daily_goal=int(raw.get("daily_goal") or cfg.daily_goal),
+        goal_timezone=str(raw.get("goal_timezone") or cfg.goal_timezone),
+        ask_confirmation_mode=str(raw.get("ask_confirmation_mode") or cfg.ask_confirmation_mode),
+        ask_session_ttl_sec=int(raw.get("ask_session_ttl_sec") or cfg.ask_session_ttl_sec),
+        ask_cli_auto_session=bool(raw.get("ask_cli_auto_session", cfg.ask_cli_auto_session)),
     )
 
 
@@ -130,6 +140,11 @@ def dump_config(config: PaperToolConfig, config_path: Path | None = None) -> Pat
         f"sync_enabled = {'true' if config.sync_enabled else 'false'}",
         f"sync_pull_interval_sec = {int(config.sync_pull_interval_sec)}",
         f"sync_push_interval_sec = {int(config.sync_push_interval_sec)}",
+        f"daily_goal = {int(config.daily_goal)}",
+        f'goal_timezone = "{config.goal_timezone}"',
+        f'ask_confirmation_mode = "{config.ask_confirmation_mode}"',
+        f"ask_session_ttl_sec = {int(config.ask_session_ttl_sec)}",
+        f"ask_cli_auto_session = {'true' if config.ask_cli_auto_session else 'false'}",
     ]
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return path
@@ -169,4 +184,9 @@ def config_from_kwargs(project_root: Path, values: dict[str, Any]) -> PaperToolC
     cfg.sync_enabled = bool(values.get("sync_enabled", cfg.sync_enabled))
     cfg.sync_pull_interval_sec = int(values.get("sync_pull_interval_sec") or cfg.sync_pull_interval_sec)
     cfg.sync_push_interval_sec = int(values.get("sync_push_interval_sec") or cfg.sync_push_interval_sec)
+    cfg.daily_goal = int(values.get("daily_goal") or cfg.daily_goal)
+    cfg.goal_timezone = str(values.get("goal_timezone") or cfg.goal_timezone)
+    cfg.ask_confirmation_mode = str(values.get("ask_confirmation_mode") or cfg.ask_confirmation_mode)
+    cfg.ask_session_ttl_sec = int(values.get("ask_session_ttl_sec") or cfg.ask_session_ttl_sec)
+    cfg.ask_cli_auto_session = bool(values.get("ask_cli_auto_session", cfg.ask_cli_auto_session))
     return cfg

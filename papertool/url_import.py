@@ -12,6 +12,12 @@ from urllib.request import Request, urlopen
 
 from papertool.db import PaperDB
 from papertool.ingest import IngestStats, ingest_file
+from papertool.resources import (
+    link_resource_to_paper,
+    parse_topics_csv,
+    tag_resource_topics,
+    upsert_resource,
+)
 
 USER_AGENT = "PaperTool/0.1 (+https://localhost)"
 
@@ -23,6 +29,8 @@ class ImportedResource:
     saved_path: str
     title: str
     paper_id: str | None
+    entity_type: str = "paper"
+    entity_id: str | None = None
 
 
 class _VisibleTextParser(HTMLParser):
@@ -72,6 +80,8 @@ def detect_resource_kind(url: str) -> str:
         return "github"
     if host in {"x.com", "www.x.com", "twitter.com", "www.twitter.com"} and "/status/" in path:
         return "x_post"
+    if "blog" in host or path.startswith("/blog/") or "/blog/" in path:
+        return "blog"
     return "webpage"
 
 
@@ -295,6 +305,22 @@ def _ingest_saved_file(db: PaperDB, saved_path: Path) -> str | None:
     return str(row["id"])
 
 
+def _default_resource_title(url: str, kind: str) -> str:
+    parsed = urlparse(url)
+    path = parsed.path.strip("/")
+    if kind == "github":
+        ref = _github_repo_ref(url)
+        if ref:
+            owner, repo = ref
+            return f"{owner}/{repo}"
+    if kind == "x_post":
+        tail = path.split("/")[-1] if path else ""
+        return f"X Post {tail}".strip()
+    if path:
+        return path.split("/")[-1] or parsed.netloc
+    return parsed.netloc or url
+
+
 def import_url_to_library(
     db: PaperDB,
     library_dir: Path,
@@ -302,11 +328,24 @@ def import_url_to_library(
     *,
     page_title: str | None = None,
     context_text: str | None = None,
+    topics: list[str] | str | None = None,
+    link_paper_id: str | None = None,
+    kind_override: str | None = None,
 ) -> ImportedResource:
     normalized = normalize_input_url(url)
-    kind = detect_resource_kind(normalized)
+    detected_kind = detect_resource_kind(normalized)
+    kind = (kind_override or detected_kind).strip().lower()
     captures_root = library_dir / "captures"
     clean_page_title = _clean_title(page_title or "") if page_title else None
+    if kind not in {"arxiv", "pdf", "github", "x_post", "blog", "webpage", "other"}:
+        raise ValueError(f"Unsupported resource kind override: {kind}")
+
+    if isinstance(topics, str):
+        topic_list = parse_topics_csv(topics)
+    elif topics is None:
+        topic_list = []
+    else:
+        topic_list = [str(topic).strip().lower() for topic in topics if str(topic).strip()]
 
     if kind in {"pdf", "arxiv"}:
         pdf_url = arxiv_abs_to_pdf(normalized) if kind == "arxiv" else normalized
@@ -322,6 +361,8 @@ def import_url_to_library(
                         saved_path=str(existing["path"]),
                         title=canonical,
                         paper_id=str(existing["id"]),
+                        entity_type="paper",
+                        entity_id=str(existing["id"]),
                     )
         pdf_bytes, _ = _http_get(pdf_url, accept="application/pdf,*/*")
         if kind == "arxiv":
@@ -342,42 +383,42 @@ def import_url_to_library(
             saved_path=str(saved.resolve()),
             title=title_hint,
             paper_id=paper_id,
+            entity_type="paper",
+            entity_id=paper_id,
         )
-
-    if kind == "github":
-        title, markdown = _fetch_github_repo_markdown(normalized)
-    elif kind == "x_post":
-        title, markdown = _fetch_x_post_markdown(normalized)
-    else:
-        payload_bytes, content_type = _http_get(
-            normalized,
-            accept="text/html,application/xhtml+xml,text/plain,application/pdf,*/*",
+    # Metadata-only bookmark model for non-paper resources.
+    file_title = clean_page_title or _default_resource_title(normalized, kind)
+    notes = context_text.strip() if context_text else None
+    resource = upsert_resource(
+        db,
+        url=normalized,
+        title=file_title,
+        kind=kind if kind in {"github", "x_post", "blog", "webpage"} else "other",
+        notes=notes,
+    )
+    resource_id = str(resource["id"])
+    heuristic_blob = " ".join([file_title, notes or ""]).strip()
+    tag_resource_topics(
+        db,
+        resource_id=resource_id,
+        manual_topics=topic_list,
+        heuristic_text=heuristic_blob,
+    )
+    if link_paper_id:
+        link_resource_to_paper(
+            db,
+            resource_id=resource_id,
+            paper_id=link_paper_id,
+            link_type="related",
         )
-        if "pdf" in content_type.lower():
-            title_hint = page_title or Path(urlparse(normalized).path).stem or "paper"
-            saved = _write_unique_bytes(captures_root / "papers", title_hint, ".pdf", payload_bytes)
-            paper_id = _ingest_saved_file(db, saved)
-            return ImportedResource(
-                url=normalized,
-                resource_kind="pdf",
-                saved_path=str(saved.resolve()),
-                title=title_hint,
-                paper_id=paper_id,
-            )
-        title, markdown = _render_generic_web_markdown(normalized, payload_bytes)
-
-    if context_text:
-        markdown += "\n## Capture Context\n\n" + context_text.strip() + "\n"
-
-    file_title = clean_page_title or title
-    saved = _write_unique_text(captures_root / "web", file_title, ".md", markdown)
-    paper_id = _ingest_saved_file(db, saved)
     return ImportedResource(
         url=normalized,
         resource_kind=kind,
-        saved_path=str(saved.resolve()),
+        saved_path="",
         title=file_title,
-        paper_id=paper_id,
+        paper_id=None,
+        entity_type="resource",
+        entity_id=resource_id,
     )
 
 
