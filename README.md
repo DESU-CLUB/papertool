@@ -11,6 +11,8 @@ PaperTool is a local-first learning system for research papers with:
 - Local bridge API for browser extension capture
 - Reading queue + daily planner (inbox/today/next/later/done)
 - Paper-of-the-day + post-read micro-quiz + spaced review
+- Daily streaks + Bronze/Silver/Gold medals + local HTML dashboard
+- Lightweight resource bookmarks (X/blog/web), topic tags, and paper links
 
 ## What this MVP supports
 
@@ -21,6 +23,7 @@ PaperTool is a local-first learning system for research papers with:
 5. Recycle previously incorrect quiz prompts in the next batches at an 8:2 new-to-old mix (when enough old prompts exist).
 6. Import URLs directly into your library from CLI, MCP, or a browser extension.
 7. Plan a focused daily reading list and run a short post-read quiz loop.
+8. Track learning streaks and per-paper medals with reversible Silver state.
 
 ## Install
 
@@ -90,6 +93,8 @@ Key config flags:
 - `remote_api_base_url`, `remote_api_token`
 - `minio_endpoint`, `minio_bucket`, `minio_access_key`, `minio_secret_key`
 - `sync_enabled`, `sync_pull_interval_sec`, `sync_push_interval_sec`
+- `daily_goal`, `goal_timezone`
+- `ask_confirmation_mode` (`session|always|never`), `ask_session_ttl_sec`, `ask_cli_auto_session`
 
 ## Usage
 
@@ -110,7 +115,14 @@ Ask question:
 ```bash
 papertool ask "What are the key differences between diffusion and autoregressive models?"
 papertool ask "How does MoE routing work?" --topic moe
+papertool ask "Summarize FlashAttention" --confirm-mode always
+papertool ask "Summarize FlashAttention-2" --session-id study-fa
 ```
+
+Session confirmation behavior:
+- `session` (default): first ask for a scope requires confirmation; repeated asks with identical paper scope auto-log.
+- `always`: always prompt before logging.
+- `never`: skip confirmation and log immediately.
 
 Search passages directly:
 
@@ -151,6 +163,22 @@ papertool submit-answer --question-id <question_id> --answer \"...\" --score 0.6
 papertool review-due --count 5
 ```
 
+Set daily goal and view streak status:
+
+```bash
+papertool goal set --daily 2 --timezone America/Los_Angeles
+papertool goal status
+```
+
+Manage medals, repo links, and dashboard:
+
+```bash
+papertool medals status --limit 100
+papertool medals link-repo --paper-id <paper_id> --url "https://github.com/DESU-CLUB/your-repo"
+papertool medals recompute --from 2026-02-01
+papertool medals dashboard --output ./.papertool/medals.html
+```
+
 Manage queue status:
 
 ```bash
@@ -164,6 +192,19 @@ Import any URL:
 papertool import-url "https://arxiv.org/abs/2205.14135"
 papertool import-url "https://github.com/Dao-AILab/flash-attention"
 papertool import-url "https://x.com/user/status/1234567890"
+papertool import-url "https://x.com/user/status/1234567890" --topics "attention,systems" --link-paper-id <paper_id>
+papertool import-url "https://myblog.com/post" --kind blog --topics "mamba,architecture"
+```
+
+Manage resource bookmarks:
+
+```bash
+papertool resource list --kind x_post --limit 50
+papertool resource show --resource-id <resource_id>
+papertool resource tag --resource-id <resource_id> --topics "attention,systems"
+papertool resource link --resource-id <resource_id> --paper-id <paper_id> --type related
+papertool resource links --paper-id <paper_id>
+papertool paper-of-day --show-resources
 ```
 
 Run local bridge server (for extension/app integrations):
@@ -214,7 +255,10 @@ papertool mcp-serve
 Available MCP tools:
 - `list_papers(limit=100)`
 - `search_papers(query, top_k=6, topic=null, community_id=null)`
-- `ask_papers(question, top_k=6, save_to_obsidian=true, topic=null, community_id=null)`
+- `ask_papers_prepare(question, top_k=6, paper_ids=null, arxiv_ids=null, topic=null, community_id=null, session_id=null, confirm_mode=null)`
+- `ask_papers_confirm(pending_id, approve, save_to_obsidian=true, session_id=null, confirm_mode=null)`
+- `ask_papers(question, top_k=6, save_to_obsidian=true, topic=null, community_id=null, paper_ids=null, arxiv_ids=null, session_id=null, confirm_mode=null)`
+- `ask_scope_lock_status(session_id, channel="mcp")`
 - `get_daily_quiz(count=5)`
 - `submit_quiz_answer(question_id, user_answer, score=null)`
 - `citation_graph()`
@@ -230,6 +274,19 @@ Available MCP tools:
 - `paper_of_day(include_quiz=false, quiz_count=3)`
 - `complete_reading(paper_id, quiz_count=3)`
 - `due_reviews(count=5)`
+- `set_daily_goal(daily_goal, timezone="America/Los_Angeles")`
+- `goal_status()`
+- `link_paper_repo(paper_id, url)`
+- `paper_medals(paper_id)`
+- `medals_overview(limit=100)`
+- `build_medals_dashboard(output_path=null)`
+- `recompute_medals(from_day=null)`
+- `add_resource(url, title=null, notes=null, topics=[], paper_id=null, kind=null)`
+- `list_resources(kind=null, topic=null, limit=100)`
+- `resource_details(resource_id)`
+- `tag_resource(resource_id, topics)`
+- `link_resource(resource_id, paper_id, link_type="related")`
+- `paper_resources(paper_id, limit=20)`
 
 ### Example MCP config (Claude Code / Codex)
 
@@ -268,6 +325,10 @@ SQLite DB tables:
 - `topic_catalog` + `paper_topic_scores` (overlapping topic clusters)
 - `citation_communities` (citation graph communities)
 - `cluster_runs` (cluster build run history)
+- `goal_settings` (daily goal + timezone)
+- `daily_progress` + `daily_qualified_papers` (goal and streak state by day)
+- `paper_medals` + `paper_repo_links` + `medal_events` (Bronze/Silver/Gold and audit)
+- `resources` + `resource_topics` + `paper_resource_links` (metadata-only URL enrichment and linking)
 
 ## Chrome extension integration
 
@@ -294,7 +355,7 @@ The resource is downloaded/converted into `library/captures/` and ingested autom
 - Citation linking currently uses DOI/arXiv identifiers found in reference sections.
 - Q&A answering is retrieval-backed and extractive by default (no external LLM call).
 - PDF extraction quality depends on text layer quality in PDFs.
-- Quiz answers with scores automatically update spaced-review cards (low score resets interval, high score expands interval).
+- Quiz answers with scores automatically update spaced-review cards (low score resets interval, high score expands interval). Score accepts `0-1` or `0-10` and normalizes to `0-1`.
 
 ## Run tests
 
