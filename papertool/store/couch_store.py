@@ -28,21 +28,16 @@ class CouchStore:
         self.db.initialize()
         if not self._couch:
             return
-        self._couch.ensure_db(self.config.couchdb_db_meta)
-        self._couch.ensure_db(self.config.couchdb_db_events)
-        self._couch.ensure_db(self.config.couchdb_db_jobs)
-        if self.config.sync_enabled:
-            try:
-                self.sync_run(pull=True, push=False)
-            except Exception as exc:
-                self.db.set_sync_state("last_sync_error", str(exc))
+        try:
+            self._couch.ensure_db(self.config.couchdb_db_meta)
+            self._couch.ensure_db(self.config.couchdb_db_events)
+            self._couch.ensure_db(self.config.couchdb_db_jobs)
+            self.db.set_sync_state("last_sync_error", "")
+        except Exception as exc:
+            # Keep local command path responsive even if remote store is unavailable.
+            self.db.set_sync_state("last_sync_error", str(exc))
 
     def close(self) -> None:
-        if self.config.sync_enabled and self._couch:
-            try:
-                self.sync_run(pull=False, push=True)
-            except Exception as exc:
-                self.db.set_sync_state("last_sync_error", str(exc))
         self.db.close()
 
     def _table_columns(self, table: str) -> list[str]:
@@ -221,6 +216,9 @@ class CouchStore:
             "push": {},
             "pull": {},
         }
+        self._couch.ensure_db(self.config.couchdb_db_meta)
+        self._couch.ensure_db(self.config.couchdb_db_events)
+        self._couch.ensure_db(self.config.couchdb_db_jobs)
 
         if push:
             docs = self._docs_from_local()
