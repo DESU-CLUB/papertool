@@ -4,7 +4,6 @@ PaperTool is a local-first learning system for research papers with:
 - Paper ingestion from a folder
 - Search and evidence-grounded Q&A
 - Citation graph extraction/view export
-- Obsidian note syncing
 - Daily quiz generation weighted toward newer papers
 - MCP server for Codex / Claude Code integration
 - URL importing (arXiv/PDF/GitHub/X/web pages)
@@ -17,13 +16,12 @@ PaperTool is a local-first learning system for research papers with:
 ## What this MVP supports
 
 1. Ask questions through MCP (`ask_papers`) or CLI (`papertool ask`).
-2. Build a citation graph from DOI/arXiv links found in references.
-3. Save paper summaries and Q&A notes into Obsidian vault Markdown files.
-4. Generate daily quiz questions with stronger weighting for recently ingested papers.
-5. Recycle previously incorrect quiz prompts in the next batches at an 8:2 new-to-old mix (when enough old prompts exist).
-6. Import URLs directly into your library from CLI, MCP, or a browser extension.
-7. Plan a focused daily reading list and run a short post-read quiz loop.
-8. Track learning streaks and per-paper medals with reversible Silver state.
+2. Build a citation graph from local IDs plus conservative title fallback.
+3. Generate daily quiz questions with stronger weighting for recently ingested papers.
+4. Recycle previously incorrect quiz prompts in the next batches at an 8:2 new-to-old mix (when enough old prompts exist).
+5. Import URLs directly into your library from CLI, MCP, or a browser extension.
+6. Plan a focused daily reading list and run a short post-read quiz loop.
+7. Track learning streaks and per-paper medals with reversible Silver state.
 
 ## Install
 
@@ -76,7 +74,6 @@ Create config:
 papertool init \
   --library-dir ./library \
   --db-path ./.papertool/papertool.db \
-  --obsidian-vault /absolute/path/to/your/ObsidianVault \
   --retrieval-backend shadow \
   --rust-index-dir ./.papertool/index/v1 \
   --cluster-mode on_demand
@@ -95,6 +92,8 @@ Key config flags:
 - `sync_enabled`, `sync_pull_interval_sec`, `sync_push_interval_sec`
 - `daily_goal`, `goal_timezone`
 - `ask_confirmation_mode` (`session|always|never`), `ask_session_ttl_sec`, `ask_cli_auto_session`
+- `citation_refresh_on_import`
+- `citation_title_match_mode` (`conservative|balanced|aggressive`)
 
 ## Usage
 
@@ -139,6 +138,15 @@ papertool index refresh --paper-id <paper_id>
 papertool cluster build
 papertool cluster list --type topic
 papertool cluster papers --topic attention
+```
+
+Rebuild and inspect citation links:
+
+```bash
+papertool citations rebuild
+papertool citations rebuild --paper-id <paper_id>
+papertool citations status
+papertool citations inspect --paper-id <paper_id>
 ```
 
 Generate quiz:
@@ -256,12 +264,15 @@ Available MCP tools:
 - `list_papers(limit=100)`
 - `search_papers(query, top_k=6, topic=null, community_id=null)`
 - `ask_papers_prepare(question, top_k=6, paper_ids=null, arxiv_ids=null, topic=null, community_id=null, session_id=null, confirm_mode=null)`
-- `ask_papers_confirm(pending_id, approve, save_to_obsidian=true, session_id=null, confirm_mode=null)`
-- `ask_papers(question, top_k=6, save_to_obsidian=true, topic=null, community_id=null, paper_ids=null, arxiv_ids=null, session_id=null, confirm_mode=null)`
+- `ask_papers_confirm(pending_id, approve, final_answer=null, session_id=null, confirm_mode=null)`
+- `ask_papers(question, top_k=6, final_answer=null, topic=null, community_id=null, paper_ids=null, arxiv_ids=null, session_id=null, confirm_mode=null)`
 - `ask_scope_lock_status(session_id, channel="mcp")`
 - `get_daily_quiz(count=5)`
 - `submit_quiz_answer(question_id, user_answer, score=null)`
 - `citation_graph()`
+- `rebuild_citations(paper_id=null)`
+- `citation_status()`
+- `paper_citations(paper_id)`
 - `import_resource(url, title=null, context_text=null)`
 - `import_resources(urls)`
 - `build_retrieval_index(paper_id=null)`
@@ -304,12 +315,13 @@ Use your client's MCP config format and point command to the venv binary, for ex
 }
 ```
 
-## Obsidian behavior
+## External notes workflow
 
-When `obsidian_vault` is configured:
-- Paper notes are written under `Papers/` (configurable)
-- Q&A entries append to each paper note
-- Q&A also appends to a daily note under `Daily/YYYY-MM-DD.md` (configurable)
+PaperTool no longer writes directly to Obsidian.  
+If you want vault writes, use a Codex skill workflow (for example `vault-writer`) that:
+- resolves the target vault/path from your prompt
+- appends your final answer markdown to the target note
+- keeps retrieval logs/internal snippets out of notes unless you explicitly ask for them
 
 ## Data model
 
