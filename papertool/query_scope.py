@@ -64,6 +64,13 @@ class ScopeResolution:
         }
 
 
+@dataclass(slots=True)
+class ExplicitPaperIdResolution:
+    resolved: list[ScopeCandidate]
+    missing: list[str]
+    ambiguous_by_input: dict[str, list[ScopeCandidate]]
+
+
 def _compact(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", (value or "").lower())
 
@@ -85,28 +92,50 @@ def _dedupe(items: list[str]) -> list[str]:
     return out
 
 
-def _from_explicit_ids(db: PaperDB, paper_ids: list[str]) -> list[ScopeCandidate]:
+def _from_explicit_ids(db: PaperDB, paper_ids: list[str]) -> ExplicitPaperIdResolution:
     picked: list[ScopeCandidate] = []
+    missing: list[str] = []
+    ambiguous: dict[str, list[ScopeCandidate]] = {}
     for paper_id in _dedupe(paper_ids):
-        row = db.get_paper(paper_id)
-        if not row:
-            continue
-        picked.append(
-            ScopeCandidate(
-                paper_id=str(row["id"]),
-                title=str(row["title"]),
-                score=1.0,
-                reason="explicit_paper_id",
+        candidates = db.paper_id_candidates(paper_id, limit=20)
+        if len(candidates) == 1:
+            row = candidates[0]
+            reason = "explicit_paper_id" if str(row["id"]) == str(paper_id).strip() else "explicit_paper_id_prefix"
+            picked.append(
+                ScopeCandidate(
+                    paper_id=str(row["id"]),
+                    title=str(row["title"]),
+                    score=1.0,
+                    reason=reason,
+                )
             )
-        )
-    return picked
+            continue
+        if len(candidates) > 1:
+            ambiguous[paper_id] = [
+                ScopeCandidate(
+                    paper_id=str(candidate["id"]),
+                    title=str(candidate["title"]),
+                    score=1.0,
+                    reason="explicit_paper_id_ambiguous_prefix",
+                )
+                for candidate in candidates
+            ]
+            continue
+        missing.append(paper_id)
+    return ExplicitPaperIdResolution(
+        resolved=picked,
+        missing=missing,
+        ambiguous_by_input=ambiguous,
+    )
 
 
-def _from_arxiv_ids(db: PaperDB, arxiv_ids: list[str], reason: str) -> list[ScopeCandidate]:
+def _from_arxiv_ids(db: PaperDB, arxiv_ids: list[str], reason: str) -> tuple[list[ScopeCandidate], list[str]]:
     picked: list[ScopeCandidate] = []
+    missing: list[str] = []
     for arxiv_id in _dedupe(arxiv_ids):
         row = db.get_paper_by_arxiv_id(arxiv_id)
         if not row:
+            missing.append(arxiv_id)
             continue
         picked.append(
             ScopeCandidate(
@@ -116,7 +145,7 @@ def _from_arxiv_ids(db: PaperDB, arxiv_ids: list[str], reason: str) -> list[Scop
                 reason=reason,
             )
         )
-    return picked
+    return picked, missing
 
 
 def resolve_question_scope(
@@ -130,8 +159,55 @@ def resolve_question_scope(
     explicit_paper_ids = explicit_paper_ids or []
     explicit_arxiv_ids = explicit_arxiv_ids or []
 
-    selected_candidates = _from_explicit_ids(db, explicit_paper_ids)
-    selected_candidates.extend(_from_arxiv_ids(db, explicit_arxiv_ids, reason="explicit_arxiv_id"))
+    explicit_id_resolution = _from_explicit_ids(db, explicit_paper_ids)
+    if explicit_id_resolution.ambiguous_by_input:
+        candidates: list[ScopeCandidate] = []
+        for rows in explicit_id_resolution.ambiguous_by_input.values():
+            candidates.extend(rows)
+        unique_candidates: list[ScopeCandidate] = []
+        seen: set[str] = set()
+        for item in candidates:
+            if item.paper_id in seen:
+                continue
+            seen.add(item.paper_id)
+            unique_candidates.append(item)
+        ambiguous_inputs = ", ".join(sorted(explicit_id_resolution.ambiguous_by_input.keys()))
+        return ScopeResolution(
+            selected_paper_ids=[],
+            selected_papers=[],
+            candidates=unique_candidates[:candidate_limit],
+            ambiguous=True,
+            message=(
+                f"Ambiguous --paper-id prefix match for: {ambiguous_inputs}. "
+                "Pass full paper IDs (or a unique prefix of at least 4 characters)."
+            ),
+        )
+    if explicit_id_resolution.missing:
+        missing = ", ".join(sorted(explicit_id_resolution.missing))
+        return ScopeResolution(
+            selected_paper_ids=[],
+            selected_papers=[],
+            candidates=[],
+            ambiguous=True,
+            message=(
+                f"Could not find paper for --paper-id: {missing}. "
+                "Use `papertool list` and pass a full paper ID (or unique prefix >= 4 chars)."
+            ),
+        )
+
+    selected_candidates = list(explicit_id_resolution.resolved)
+    explicit_arxiv_matches, missing_explicit_arxiv = _from_arxiv_ids(db, explicit_arxiv_ids, reason="explicit_arxiv_id")
+    selected_candidates.extend(explicit_arxiv_matches)
+    if explicit_arxiv_ids and missing_explicit_arxiv:
+        missing = ", ".join(sorted(missing_explicit_arxiv))
+        return ScopeResolution(
+            selected_paper_ids=[],
+            selected_papers=[],
+            candidates=[],
+            ambiguous=True,
+            message=f"Could not find paper for --arxiv-id: {missing}.",
+        )
+
     selected_ids = _dedupe([item.paper_id for item in selected_candidates])
     if selected_ids:
         selected = []
@@ -150,7 +226,7 @@ def resolve_question_scope(
         )
 
     extracted_arxiv = ARXIV_RE.findall(question or "")
-    auto_arxiv = _from_arxiv_ids(db, extracted_arxiv, reason="question_arxiv_id")
+    auto_arxiv, _ = _from_arxiv_ids(db, extracted_arxiv, reason="question_arxiv_id")
     if auto_arxiv:
         resolved_ids = _dedupe([item.paper_id for item in auto_arxiv])
         unique_rows: list[ScopeCandidate] = []

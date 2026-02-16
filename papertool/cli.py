@@ -15,14 +15,8 @@ from papertool.ask_service import commit_or_confirm, prepare_ask_with_lock
 from papertool.dashboard import build_medals_dashboard
 from papertool.db import PaperDB
 from papertool.graph import export_graph_html, export_graph_json, export_graph_mermaid
-from papertool.ingest import ingest_folder
+from papertool.ingest import citation_mentions_preview, ingest_folder, rebuild_citation_graph
 from papertool.medals import link_repo_to_paper, recompute_all_medals
-from papertool.obsidian import (
-    append_qa_to_paper_note,
-    append_quiz_entry_to_paper_note,
-    sync_review_prompts_in_paper_note,
-    upsert_paper_note,
-)
 from papertool.planner import (
     due_review_questions,
     generate_micro_quiz_for_paper,
@@ -44,10 +38,10 @@ from papertool.url_import import import_result_to_dict, import_url_to_library
 
 app = typer.Typer(help="PaperTool CLI")
 graph_app = typer.Typer(help="Graph export commands")
-note_app = typer.Typer(help="Note commands")
 queue_app = typer.Typer(help="Reading queue commands")
 index_app = typer.Typer(help="Retrieval index commands")
 cluster_app = typer.Typer(help="Clustering commands")
+citations_app = typer.Typer(help="Citation enrichment and inspection commands")
 sync_app = typer.Typer(help="Sync commands")
 migrate_app = typer.Typer(help="Migration commands")
 remote_app = typer.Typer(help="Remote API and worker commands")
@@ -55,10 +49,10 @@ goal_app = typer.Typer(help="Daily goal and streak commands")
 medals_app = typer.Typer(help="Medal commands")
 resource_app = typer.Typer(help="Resource bookmark and tagging commands")
 app.add_typer(graph_app, name="graph")
-app.add_typer(note_app, name="note")
 app.add_typer(queue_app, name="queue")
 app.add_typer(index_app, name="index")
 app.add_typer(cluster_app, name="cluster")
+app.add_typer(citations_app, name="citations")
 app.add_typer(sync_app, name="sync")
 app.add_typer(migrate_app, name="migrate")
 app.add_typer(remote_app, name="remote")
@@ -84,53 +78,6 @@ def _close_db(db: PaperDB) -> None:
     db.close()
 
 
-def _sync_review_prompts_note(db: PaperDB, cfg: object, paper_id: str) -> None:
-    if not getattr(cfg, "obsidian_vault", None):
-        return
-    paper = db.get_paper(paper_id)
-    if not paper:
-        return
-    upsert_paper_note(
-        cfg,  # type: ignore[arg-type]
-        title=paper["title"],
-        source_path=paper["path"],
-        summary=paper["summary"] or "",
-        doi=paper["doi"],
-        arxiv_id=paper["arxiv_id"],
-    )
-    prompts = [str(row["question_text"]) for row in db.quiz_prompts_for_paper(paper_id, limit=50)]
-    sync_review_prompts_in_paper_note(
-        cfg,  # type: ignore[arg-type]
-        title=paper["title"],
-        prompts=prompts,
-    )
-
-
-def _append_quiz_note_entry(db: PaperDB, cfg: object, paper_id: str, question: str, source: str, answered: bool, score: float | None = None) -> None:
-    if not getattr(cfg, "obsidian_vault", None):
-        return
-    paper = db.get_paper(paper_id)
-    if not paper:
-        return
-    upsert_paper_note(
-        cfg,  # type: ignore[arg-type]
-        title=paper["title"],
-        source_path=paper["path"],
-        summary=paper["summary"] or "",
-        doi=paper["doi"],
-        arxiv_id=paper["arxiv_id"],
-    )
-    append_quiz_entry_to_paper_note(
-        cfg,  # type: ignore[arg-type]
-        title=paper["title"],
-        question=question,
-        source=source,
-        answered=answered,
-        score=score,
-    )
-    _sync_review_prompts_note(db, cfg, paper_id)
-
-
 def _normalize_confirm_mode(value: str | None, default: str) -> str:
     mode = (value or default or "session").strip().lower()
     if mode not in {"session", "always", "never"}:
@@ -148,9 +95,6 @@ def _default_cli_session_id() -> str:
 def init(
     library_dir: Optional[str] = typer.Option(None, help="Path to folder containing papers"),
     db_path: Optional[str] = typer.Option(None, help="Path to SQLite DB"),
-    obsidian_vault: Optional[str] = typer.Option(None, help="Path to Obsidian vault"),
-    obsidian_papers_dir: str = typer.Option("Papers", help="Folder for paper notes inside vault"),
-    obsidian_daily_dir: str = typer.Option("Daily", help="Folder for daily notes inside vault"),
     retrieval_backend: str = typer.Option("shadow", help="python|shadow|rust"),
     rust_index_dir: Optional[str] = typer.Option(None, help="Path to Rust retrieval index dir"),
     cluster_mode: str = typer.Option("on_demand", help="Cluster update mode"),
@@ -173,6 +117,8 @@ def init(
     ask_confirmation_mode: str = typer.Option("session", help="Ask confirm mode: session|always|never"),
     ask_session_ttl_sec: int = typer.Option(1800, help="Ask session lock TTL in seconds"),
     ask_cli_auto_session: bool = typer.Option(True, "--ask-cli-auto-session/--no-ask-cli-auto-session", help="Auto derive workspace session_id for CLI ask"),
+    citation_refresh_on_import: bool = typer.Option(True, "--citation-refresh-on-import/--no-citation-refresh-on-import", help="Refresh citations after ingest/import"),
+    citation_title_match_mode: str = typer.Option("conservative", help="Title match mode: conservative|balanced|aggressive"),
 ) -> None:
     root = Path.cwd()
     cfg = config_from_kwargs(
@@ -180,9 +126,6 @@ def init(
         {
             "library_dir": library_dir,
             "db_path": db_path,
-            "obsidian_vault": obsidian_vault,
-            "obsidian_papers_dir": obsidian_papers_dir,
-            "obsidian_daily_dir": obsidian_daily_dir,
             "retrieval_backend": retrieval_backend,
             "rust_index_dir": rust_index_dir,
             "cluster_mode": cluster_mode,
@@ -205,6 +148,8 @@ def init(
             "ask_confirmation_mode": ask_confirmation_mode,
             "ask_session_ttl_sec": ask_session_ttl_sec,
             "ask_cli_auto_session": ask_cli_auto_session,
+            "citation_refresh_on_import": citation_refresh_on_import,
+            "citation_title_match_mode": citation_title_match_mode,
         },
     )
     out = dump_config(cfg)
@@ -219,7 +164,7 @@ def ingest(folder: Optional[str] = typer.Option(None, help="Paper folder; defaul
     try:
         target = Path(folder).expanduser().resolve() if folder else cfg.library_dir
         target.mkdir(parents=True, exist_ok=True)
-        stats = ingest_folder(db, target)
+        stats = ingest_folder(db, target, config=cfg)
         typer.echo(
             f"Scanned {stats.scanned} files, ingested {stats.ingested}, skipped {stats.skipped}."
         )
@@ -272,7 +217,6 @@ def ask(
     session_id: Optional[str] = typer.Option(None, "--session-id", help="Optional ask session identifier"),
     confirm_mode: Optional[str] = typer.Option(None, "--confirm-mode", help="session|always|never"),
     confirm: Optional[str] = typer.Option(None, help="yes|no (required when confirmation is needed in non-interactive mode)"),
-    save_notes: bool = typer.Option(True, "--save-notes/--no-save-notes", help="Persist Q&A in Obsidian"),
 ) -> None:
     db, cfg = _db()
     try:
@@ -302,7 +246,7 @@ def ask(
                 for row in candidates[:8]:
                     if isinstance(row, dict):
                         typer.echo(
-                            f"- {str(row.get('paper_id', ''))[:8]} :: {row.get('title', '')} "
+                            f"- {str(row.get('paper_id', ''))} :: {row.get('title', '')} "
                             f"(score={float(row.get('score', 0.0)):.2f})",
                             err=True,
                         )
@@ -329,7 +273,6 @@ def ask(
                 cfg,  # type: ignore[arg-type]
                 pending_id=pending_id,
                 approve=True,
-                save_notes=save_notes,
                 session_id=effective_session_id,
                 confirm_mode=effective_mode,
                 channel="cli",
@@ -361,7 +304,6 @@ def ask(
             cfg,  # type: ignore[arg-type]
             pending_id=pending_id,
             approve=approve,
-            save_notes=save_notes,
             session_id=effective_session_id,
             confirm_mode=effective_mode,
             channel="cli",
@@ -381,7 +323,7 @@ def ask(
 
 @app.command()
 def quiz(count: int = typer.Option(5, help="How many questions to generate")) -> None:
-    db, cfg = _db()
+    db, _cfg = _db()
     try:
         questions = generate_daily_quiz(db, count=count)
         if not questions:
@@ -390,15 +332,6 @@ def quiz(count: int = typer.Option(5, help="How many questions to generate")) ->
         for idx, question in enumerate(questions, start=1):
             typer.echo(f"[{idx}] {question.prompt}")
             typer.echo(f"    question_id={question.question_id}")
-            _append_quiz_note_entry(
-                db,
-                cfg,
-                question.paper_id,
-                question.prompt,
-                source="daily",
-                answered=False,
-                score=None,
-            )
     finally:
         _close_db(db)
 
@@ -424,7 +357,7 @@ def paper_of_day(
     quiz_count: int = typer.Option(3, help="Quiz question count if --quiz is set"),
     show_resources: bool = typer.Option(False, "--show-resources/--no-show-resources", help="Show related resources"),
 ) -> None:
-    db, cfg = _db()
+    db, _cfg = _db()
     try:
         payload = paper_of_day_payload(db)
         if not payload:
@@ -447,15 +380,6 @@ def paper_of_day(
             for idx, question in enumerate(questions, start=1):
                 typer.echo(f"  Q{idx}. {question.prompt}")
                 typer.echo(f"     question_id={question.question_id}")
-                _append_quiz_note_entry(
-                    db,
-                    cfg,
-                    question.paper_id,
-                    question.prompt,
-                    source="micro",
-                    answered=False,
-                    score=None,
-                )
     finally:
         _close_db(db)
 
@@ -465,7 +389,7 @@ def complete_reading(
     paper_id: str = typer.Option(..., help="Paper ID to mark as done"),
     quiz_count: int = typer.Option(3, help="How many micro-quiz questions to generate"),
 ) -> None:
-    db, cfg = _db()
+    db, _cfg = _db()
     try:
         paper = db.get_paper(paper_id)
         if not paper:
@@ -476,22 +400,13 @@ def complete_reading(
         for idx, question in enumerate(questions, start=1):
             typer.echo(f"  Q{idx}. {question.prompt}")
             typer.echo(f"     question_id={question.question_id}")
-            _append_quiz_note_entry(
-                db,
-                cfg,
-                question.paper_id,
-                question.prompt,
-                source="micro",
-                answered=False,
-                score=None,
-            )
     finally:
         _close_db(db)
 
 
 @app.command("review-due")
 def review_due(count: int = typer.Option(5, help="How many due review questions to generate")) -> None:
-    db, cfg = _db()
+    db, _cfg = _db()
     try:
         questions = due_review_questions(db, count=max(1, count))
         if not questions:
@@ -500,15 +415,6 @@ def review_due(count: int = typer.Option(5, help="How many due review questions 
         for idx, question in enumerate(questions, start=1):
             typer.echo(f"[{idx}] {question.prompt}")
             typer.echo(f"    paper={question.paper_title} question_id={question.question_id}")
-            _append_quiz_note_entry(
-                db,
-                cfg,
-                question.paper_id,
-                question.prompt,
-                source="review",
-                answered=False,
-                score=None,
-            )
     finally:
         _close_db(db)
 
@@ -529,19 +435,6 @@ def submit_answer(
         typer.echo(f"Saved answer for question_id={question_id}")
         if score is not None:
             typer.echo("Review schedule updated.")
-        if row:
-            paper_id = str(row["paper_id"])
-            source = str(row["source"] or "daily")
-            normalized = None if score is None else (score / 10.0 if score > 1 else score)
-            _append_quiz_note_entry(
-                db,
-                _cfg,
-                paper_id,
-                str(row["question_text"]),
-                source=source,
-                answered=True,
-                score=normalized,
-            )
     finally:
         _close_db(db)
 
@@ -876,6 +769,57 @@ def cluster_papers(
         _close_db(db)
 
 
+@citations_app.command("rebuild")
+def citations_rebuild(
+    paper_id: Optional[str] = typer.Option(None, help="Optional source paper ID to rebuild"),
+) -> None:
+    db, cfg = _db()
+    try:
+        result = rebuild_citation_graph(
+            db,
+            paper_ids=[paper_id] if paper_id else None,
+            config=cfg,
+        )
+        typer.echo(json.dumps(result, ensure_ascii=True))
+    finally:
+        _close_db(db)
+
+
+@citations_app.command("status")
+def citations_status() -> None:
+    db, _cfg = _db()
+    try:
+        payload = db.citation_status_summary()
+        typer.echo(json.dumps(payload, ensure_ascii=True))
+    finally:
+        _close_db(db)
+
+
+@citations_app.command("inspect")
+def citations_inspect(
+    paper_id: str = typer.Option(..., help="Paper ID to inspect"),
+) -> None:
+    db, cfg = _db()
+    try:
+        paper = db.get_paper(paper_id)
+        if not paper:
+            raise typer.BadParameter(f"Paper not found: {paper_id}")
+        payload = db.citation_edges_for_paper(paper_id)
+        payload["extracted_mentions_preview"] = citation_mentions_preview(
+            db,
+            paper_id=paper_id,
+            mode=cfg.citation_title_match_mode,
+            limit=80,
+        )
+        payload["paper"] = {
+            "id": str(paper["id"]),
+            "title": str(paper["title"]),
+        }
+        typer.echo(json.dumps(payload, ensure_ascii=True))
+    finally:
+        _close_db(db)
+
+
 @sync_app.command("run")
 def sync_run(
     pull: bool = typer.Option(True, "--pull/--no-pull", help="Pull from remote into local cache"),
@@ -1132,37 +1076,6 @@ def graph_export(
         else:
             raise typer.BadParameter("format must be one of: json, mermaid, html")
         typer.echo(f"Graph written to: {out}")
-    finally:
-        _close_db(db)
-
-
-@note_app.command("add")
-def note_add(
-    paper_id: str = typer.Option(..., help="Paper ID"),
-    text: str = typer.Option(..., help="Note text to append"),
-) -> None:
-    db, cfg = _db()
-    try:
-        if not cfg.obsidian_vault:
-            raise typer.BadParameter("obsidian_vault not set in papertool.toml")
-        paper = db.get_paper(paper_id)
-        if not paper:
-            raise typer.BadParameter(f"Paper not found: {paper_id}")
-        upsert_paper_note(
-            cfg,
-            title=paper["title"],
-            source_path=paper["path"],
-            summary=paper["summary"] or "",
-            doi=paper["doi"],
-            arxiv_id=paper["arxiv_id"],
-        )
-        note_path = append_qa_to_paper_note(
-            cfg,
-            title=paper["title"],
-            question="Manual note",
-            answer=text,
-        )
-        typer.echo(f"Updated note: {note_path}")
     finally:
         _close_db(db)
 

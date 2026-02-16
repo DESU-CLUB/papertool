@@ -461,24 +461,70 @@ class PaperDB:
         ).fetchall()
         return list(rows)
 
+    def paper_id_candidates(self, paper_id: str, limit: int = 20) -> list[sqlite3.Row]:
+        value = str(paper_id or "").strip()
+        if not value:
+            return []
+        exact = self.conn.execute("SELECT * FROM papers WHERE id = ? LIMIT 1", (value,)).fetchone()
+        if exact is not None:
+            return [exact]
+        if len(value) < 4:
+            return []
+        rows = self.conn.execute(
+            """
+            SELECT *
+            FROM papers
+            WHERE id LIKE ?
+            ORDER BY ingested_at DESC
+            LIMIT ?
+            """,
+            (f"{value}%", max(1, int(limit))),
+        ).fetchall()
+        return list(rows)
+
+    def resolve_paper_id(self, paper_id: str) -> str | None:
+        rows = self.paper_id_candidates(paper_id, limit=2)
+        if len(rows) == 1:
+            return str(rows[0]["id"])
+        return None
+
     def get_paper(self, paper_id: str) -> sqlite3.Row | None:
-        return self.conn.execute("SELECT * FROM papers WHERE id = ?", (paper_id,)).fetchone()
+        resolved = self.resolve_paper_id(paper_id)
+        if not resolved:
+            return None
+        return self.conn.execute("SELECT * FROM papers WHERE id = ?", (resolved,)).fetchone()
+
+    def find_papers_by_id_prefix(self, prefix: str, limit: int = 20) -> list[sqlite3.Row]:
+        value = str(prefix or "").strip()
+        if len(value) < 4:
+            return []
+        rows = self.conn.execute(
+            """
+            SELECT *
+            FROM papers
+            WHERE id LIKE ?
+            ORDER BY ingested_at DESC
+            LIMIT ?
+            """,
+            (f"{value}%", max(1, int(limit))),
+        ).fetchall()
+        return list(rows)
 
     def get_papers_by_ids(self, paper_ids: list[str]) -> list[sqlite3.Row]:
         ids = [str(item).strip() for item in paper_ids if str(item).strip()]
         if not ids:
             return []
-        placeholders = ",".join("?" * len(ids))
-        rows = self.conn.execute(
-            f"SELECT * FROM papers WHERE id IN ({placeholders})",
-            ids,
-        ).fetchall()
-        row_map = {str(row["id"]): row for row in rows}
         ordered: list[sqlite3.Row] = []
-        for paper_id in ids:
-            row = row_map.get(paper_id)
-            if row is not None:
-                ordered.append(row)
+        seen: set[str] = set()
+        for raw_id in ids:
+            row = self.get_paper(raw_id)
+            if row is None:
+                continue
+            canonical = str(row["id"])
+            if canonical in seen:
+                continue
+            seen.add(canonical)
+            ordered.append(row)
         return ordered
 
     def get_paper_by_path(self, path: str) -> sqlite3.Row | None:
@@ -526,9 +572,10 @@ class PaperDB:
         return list(rows)
 
     def set_paper_arxiv_id(self, paper_id: str, arxiv_id: str) -> None:
+        canonical = self.resolve_paper_id(paper_id) or paper_id
         normalized = arxiv_id.strip().lower().replace("arxiv:", "")
         base = re.sub(r"v\d+$", "", normalized)
-        self.conn.execute("UPDATE papers SET arxiv_id = ? WHERE id = ?", (base, paper_id))
+        self.conn.execute("UPDATE papers SET arxiv_id = ? WHERE id = ?", (base, canonical))
         self.conn.commit()
 
     def search_chunks(self, query: str, limit: int = 5, paper_ids: list[str] | None = None) -> list[SearchHit]:
@@ -571,6 +618,35 @@ class PaperDB:
             )
         return hits
 
+    def paper_full_texts(self, paper_ids: list[str]) -> dict[str, str]:
+        ids = [str(item).strip() for item in paper_ids if str(item).strip()]
+        if not ids:
+            return {}
+        placeholders = ",".join("?" * len(ids))
+        rows = self.conn.execute(
+            f"""
+            SELECT paper_id, chunk_index, content
+            FROM chunks
+            WHERE paper_id IN ({placeholders})
+            ORDER BY paper_id, chunk_index
+            """,
+            ids,
+        ).fetchall()
+        by_paper: dict[str, list[str]] = {paper_id: [] for paper_id in ids}
+        for row in rows:
+            paper_id = str(row["paper_id"])
+            bucket = by_paper.get(paper_id)
+            if bucket is None:
+                continue
+            bucket.append(str(row["content"] or ""))
+        out: dict[str, str] = {}
+        for paper_id in ids:
+            parts = by_paper.get(paper_id) or []
+            text = " ".join(part.strip() for part in parts if part and str(part).strip()).strip()
+            if text:
+                out[paper_id] = text
+        return out
+
     def set_citations(self, source_paper_id: str, target_paper_ids: list[tuple[str, str, float]]) -> None:
         self.conn.execute("DELETE FROM citations WHERE source_paper_id = ?", (source_paper_id,))
         for target_id, reason, confidence in target_paper_ids:
@@ -597,6 +673,86 @@ class PaperDB:
                 """
             ).fetchall()
         )
+
+    def papers_minimal_for_citation_match(self) -> list[sqlite3.Row]:
+        return list(
+            self.conn.execute(
+                """
+                SELECT id, title, path, published_date, doi, arxiv_id
+                FROM papers
+                ORDER BY ingested_at DESC
+                """
+            ).fetchall()
+        )
+
+    def citation_status_summary(self) -> dict[str, object]:
+        total = int(self.conn.execute("SELECT COUNT(*) FROM citations").fetchone()[0])
+        by_reason_rows = self.conn.execute(
+            """
+            SELECT
+                CASE
+                    WHEN reason LIKE 'doi:%' THEN 'doi'
+                    WHEN reason LIKE 'arxiv:%' THEN 'arxiv'
+                    WHEN reason LIKE 'openalex_ref:%' THEN 'openalex_ref'
+                    WHEN reason LIKE 'title:%' THEN 'title'
+                    ELSE 'other'
+                END AS reason_type,
+                COUNT(*) AS count
+            FROM citations
+            GROUP BY reason_type
+            ORDER BY count DESC
+            """
+        ).fetchall()
+        confidence_rows = self.conn.execute(
+            """
+            SELECT
+                CASE
+                    WHEN confidence >= 0.9 THEN 'high'
+                    WHEN confidence >= 0.8 THEN 'medium'
+                    ELSE 'low'
+                END AS confidence_bucket,
+                COUNT(*) AS count
+            FROM citations
+            GROUP BY confidence_bucket
+            ORDER BY count DESC
+            """
+        ).fetchall()
+        return {
+            "total_edges": total,
+            "reason_breakdown": {str(row["reason_type"]): int(row["count"]) for row in by_reason_rows},
+            "confidence_breakdown": {str(row["confidence_bucket"]): int(row["count"]) for row in confidence_rows},
+        }
+
+    def citation_edges_for_paper(self, paper_id: str) -> dict[str, list[dict[str, object]]]:
+        canonical = self.resolve_paper_id(paper_id) or paper_id
+        outgoing_rows = self.conn.execute(
+            """
+            SELECT c.source_paper_id, c.target_paper_id, c.reason, c.confidence,
+                   s.title AS source_title, t.title AS target_title
+            FROM citations c
+            JOIN papers s ON s.id = c.source_paper_id
+            JOIN papers t ON t.id = c.target_paper_id
+            WHERE c.source_paper_id = ?
+            ORDER BY c.confidence DESC, t.title ASC
+            """,
+            (canonical,),
+        ).fetchall()
+        incoming_rows = self.conn.execute(
+            """
+            SELECT c.source_paper_id, c.target_paper_id, c.reason, c.confidence,
+                   s.title AS source_title, t.title AS target_title
+            FROM citations c
+            JOIN papers s ON s.id = c.source_paper_id
+            JOIN papers t ON t.id = c.target_paper_id
+            WHERE c.target_paper_id = ?
+            ORDER BY c.confidence DESC, s.title ASC
+            """,
+            (canonical,),
+        ).fetchall()
+        return {
+            "outgoing": [dict(row) for row in outgoing_rows],
+            "incoming": [dict(row) for row in incoming_rows],
+        }
 
     def log_retrieval_shadow(
         self,
@@ -1366,22 +1522,23 @@ class PaperDB:
         return True
 
     def add_paper_repo_link(self, paper_id: str, url: str, owner: str, repo: str, is_owner_valid: bool) -> dict[str, Any]:
+        canonical = self.resolve_paper_id(paper_id) or paper_id
         now = utc_now_iso()
         self.conn.execute(
             """
             INSERT OR IGNORE INTO paper_repo_links(paper_id, url, owner, repo, is_owner_valid, added_at)
             VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (paper_id, url, owner, repo, 1 if is_owner_valid else 0, now),
+            (canonical, url, owner, repo, 1 if is_owner_valid else 0, now),
         )
         self.conn.commit()
         self.record_medal_event(
-            paper_id,
+            canonical,
             "repo_linked",
             {"url": url, "owner": owner, "repo": repo, "is_owner_valid": bool(is_owner_valid)},
         )
         return {
-            "paper_id": paper_id,
+            "paper_id": canonical,
             "url": url,
             "owner": owner,
             "repo": repo,
@@ -1568,13 +1725,14 @@ class PaperDB:
         return {"ok": True, "recomputed_days": recomputed_days, "from_day": base_date.isoformat(), "to_day": today.isoformat()}
 
     def get_paper_medal(self, paper_id: str) -> dict[str, Any] | None:
+        canonical = self.resolve_paper_id(paper_id) or paper_id
         row = self.conn.execute(
             """
             SELECT paper_id, bronze_awarded_at, silver_awarded_at, silver_active, silver_revoked_at, gold_awarded_at, gold_repo_url, updated_at
             FROM paper_medals
             WHERE paper_id = ?
             """,
-            (paper_id,),
+            (canonical,),
         ).fetchone()
         if not row:
             return None
@@ -1590,6 +1748,7 @@ class PaperDB:
         }
 
     def paper_repo_links(self, paper_id: str) -> list[dict[str, Any]]:
+        canonical = self.resolve_paper_id(paper_id) or paper_id
         rows = self.conn.execute(
             """
             SELECT id, paper_id, url, owner, repo, is_owner_valid, added_at
@@ -1597,7 +1756,7 @@ class PaperDB:
             WHERE paper_id = ?
             ORDER BY added_at DESC
             """,
-            (paper_id,),
+            (canonical,),
         ).fetchall()
         return [
             {
@@ -1766,6 +1925,7 @@ class PaperDB:
         return [dict(row) for row in rows]
 
     def link_paper_resource(self, paper_id: str, resource_id: str, link_type: str = "related") -> dict[str, Any]:
+        canonical = self.resolve_paper_id(paper_id) or paper_id
         allowed = {"related", "implementation", "update", "background"}
         normalized = link_type.strip().lower()
         if normalized not in allowed:
@@ -1777,7 +1937,7 @@ class PaperDB:
             WHERE paper_id = ? AND resource_id = ? AND link_type = ?
             LIMIT 1
             """,
-            (paper_id, resource_id, normalized),
+            (canonical, resource_id, normalized),
         ).fetchone()
         if row:
             return dict(row)
@@ -1788,7 +1948,7 @@ class PaperDB:
             INSERT INTO paper_resource_links(id, paper_id, resource_id, link_type, created_at)
             VALUES (?, ?, ?, ?, ?)
             """,
-            (link_id, paper_id, resource_id, normalized, created_at),
+            (link_id, canonical, resource_id, normalized, created_at),
         )
         self.conn.commit()
         out = self.conn.execute(
@@ -1804,6 +1964,7 @@ class PaperDB:
         return dict(out)
 
     def resource_links_for_paper(self, paper_id: str, limit: int = 20) -> list[dict[str, Any]]:
+        canonical = self.resolve_paper_id(paper_id) or paper_id
         rows = self.conn.execute(
             """
             SELECT prl.id, prl.paper_id, prl.resource_id, prl.link_type, prl.created_at,
@@ -1814,7 +1975,7 @@ class PaperDB:
             ORDER BY prl.created_at DESC
             LIMIT ?
             """,
-            (paper_id, max(1, limit)),
+            (canonical, max(1, limit)),
         ).fetchall()
         return [dict(row) for row in rows]
 
@@ -1834,7 +1995,8 @@ class PaperDB:
         return [dict(row) for row in rows]
 
     def related_resources_for_paper(self, paper_id: str, limit: int = 20) -> list[dict[str, Any]]:
-        direct = self.resource_links_for_paper(paper_id, limit=limit)
+        canonical = self.resolve_paper_id(paper_id) or paper_id
+        direct = self.resource_links_for_paper(canonical, limit=limit)
         seen_ids = {str(row["resource_id"]) for row in direct}
         if len(direct) >= limit:
             return direct[:limit]
@@ -1858,7 +2020,7 @@ class PaperDB:
             ORDER BY overlap_score DESC, r.updated_at DESC
             LIMIT ?
             """,
-            (paper_id, max(remaining * 4, remaining)),
+            (canonical, max(remaining * 4, remaining)),
         ).fetchall()
         out = direct[:]
         for row in overlap_rows:
@@ -1868,7 +2030,7 @@ class PaperDB:
             out.append(
                 {
                     "id": "",
-                    "paper_id": paper_id,
+                    "paper_id": canonical,
                     "resource_id": resource_id,
                     "link_type": "related",
                     "created_at": "",
@@ -2003,40 +2165,42 @@ class PaperDB:
         self.conn.commit()
 
     def ensure_queue_entry(self, paper_id: str, status: str = "inbox") -> None:
+        canonical = self.resolve_paper_id(paper_id) or paper_id
         now = utc_now_iso()
         self.conn.execute(
             """
             INSERT OR IGNORE INTO reading_queue(paper_id, status, priority, added_at, updated_at)
             VALUES (?, ?, 1.0, ?, ?)
             """,
-            (paper_id, status, now, now),
+            (canonical, status, now, now),
         )
         self.conn.commit()
 
     def queue_set_status(self, paper_id: str, status: str, priority: float | None = None) -> None:
+        canonical = self.resolve_paper_id(paper_id) or paper_id
         now = utc_now_iso()
-        self.ensure_queue_entry(paper_id)
+        self.ensure_queue_entry(canonical)
         if priority is None:
             self.conn.execute(
                 "UPDATE reading_queue SET status = ?, updated_at = ? WHERE paper_id = ?",
-                (status, now, paper_id),
+                (status, now, canonical),
             )
         else:
             self.conn.execute(
                 "UPDATE reading_queue SET status = ?, priority = ?, updated_at = ? WHERE paper_id = ?",
-                (status, priority, now, paper_id),
+                (status, priority, now, canonical),
             )
         if status == "done":
             self.conn.execute(
                 "UPDATE reading_queue SET completed_at = ? WHERE paper_id = ?",
-                (now, paper_id),
+                (now, canonical),
             )
         self.conn.commit()
         if status == "done":
             goal = self.get_goal_settings()
             day_key = self._iso_to_day_key(now, str(goal["timezone"])) or self.day_key_now(str(goal["timezone"]))
             self.recompute_all_medals(from_day=day_key)
-            self.evaluate_paper_medals(paper_id)
+            self.evaluate_paper_medals(canonical)
 
     def queue_list(self, status: str | None = None, limit: int = 100) -> list[sqlite3.Row]:
         self.bootstrap_queue()

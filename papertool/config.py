@@ -17,9 +17,6 @@ DEFAULT_CONFIG_PATH = Path("papertool.toml")
 class PaperToolConfig:
     library_dir: Path
     db_path: Path
-    obsidian_vault: Path | None = None
-    obsidian_papers_dir: str = "Papers"
-    obsidian_daily_dir: str = "Daily"
     retrieval_backend: str = "shadow"
     rust_index_dir: Path | None = None
     cluster_mode: str = "on_demand"
@@ -42,6 +39,8 @@ class PaperToolConfig:
     ask_confirmation_mode: str = "session"
     ask_session_ttl_sec: int = 1800
     ask_cli_auto_session: bool = True
+    citation_refresh_on_import: bool = True
+    citation_title_match_mode: str = "conservative"
 
 
 def _resolve_path(path_value: str | None, root: Path) -> Path | None:
@@ -58,7 +57,6 @@ def default_config(project_root: Path) -> PaperToolConfig:
     return PaperToolConfig(
         library_dir=(project_root / "library").resolve(),
         db_path=(project_root / ".papertool" / "papertool.db").resolve(),
-        obsidian_vault=None,
         rust_index_dir=rust_index_dir,
     )
 
@@ -75,16 +73,12 @@ def load_config(config_path: Path | None = None) -> PaperToolConfig:
 
     library_dir = _resolve_path(raw.get("library_dir"), project_root)
     db_path = _resolve_path(raw.get("db_path"), project_root)
-    obsidian_vault = _resolve_path(raw.get("obsidian_vault"), project_root)
     rust_index_dir = _resolve_path(raw.get("rust_index_dir"), project_root)
 
     cfg = default_config(project_root)
     return PaperToolConfig(
         library_dir=library_dir or cfg.library_dir,
         db_path=db_path or cfg.db_path,
-        obsidian_vault=obsidian_vault,
-        obsidian_papers_dir=str(raw.get("obsidian_papers_dir") or cfg.obsidian_papers_dir),
-        obsidian_daily_dir=str(raw.get("obsidian_daily_dir") or cfg.obsidian_daily_dir),
         retrieval_backend=str(raw.get("retrieval_backend") or cfg.retrieval_backend),
         rust_index_dir=rust_index_dir or cfg.rust_index_dir,
         cluster_mode=str(raw.get("cluster_mode") or cfg.cluster_mode),
@@ -107,6 +101,8 @@ def load_config(config_path: Path | None = None) -> PaperToolConfig:
         ask_confirmation_mode=str(raw.get("ask_confirmation_mode") or cfg.ask_confirmation_mode),
         ask_session_ttl_sec=int(raw.get("ask_session_ttl_sec") or cfg.ask_session_ttl_sec),
         ask_cli_auto_session=bool(raw.get("ask_cli_auto_session", cfg.ask_cli_auto_session)),
+        citation_refresh_on_import=bool(raw.get("citation_refresh_on_import", cfg.citation_refresh_on_import)),
+        citation_title_match_mode=str(raw.get("citation_title_match_mode") or cfg.citation_title_match_mode),
     )
 
 
@@ -120,9 +116,6 @@ def dump_config(config: PaperToolConfig, config_path: Path | None = None) -> Pat
     lines = [
         f'library_dir = "{_display(config.library_dir)}"',
         f'db_path = "{_display(config.db_path)}"',
-        f'obsidian_vault = "{_display(config.obsidian_vault)}"',
-        f'obsidian_papers_dir = "{config.obsidian_papers_dir}"',
-        f'obsidian_daily_dir = "{config.obsidian_daily_dir}"',
         f'retrieval_backend = "{config.retrieval_backend}"',
         f'rust_index_dir = "{_display(config.rust_index_dir)}"',
         f'cluster_mode = "{config.cluster_mode}"',
@@ -145,6 +138,8 @@ def dump_config(config: PaperToolConfig, config_path: Path | None = None) -> Pat
         f'ask_confirmation_mode = "{config.ask_confirmation_mode}"',
         f"ask_session_ttl_sec = {int(config.ask_session_ttl_sec)}",
         f"ask_cli_auto_session = {'true' if config.ask_cli_auto_session else 'false'}",
+        f"citation_refresh_on_import = {'true' if config.citation_refresh_on_import else 'false'}",
+        f'citation_title_match_mode = "{config.citation_title_match_mode}"',
     ]
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return path
@@ -154,20 +149,15 @@ def config_from_kwargs(project_root: Path, values: dict[str, Any]) -> PaperToolC
     cfg = default_config(project_root)
     library_dir = values.get("library_dir")
     db_path = values.get("db_path")
-    obsidian_vault = values.get("obsidian_vault")
     rust_index_dir = values.get("rust_index_dir")
 
     if library_dir:
         cfg.library_dir = Path(library_dir).expanduser().resolve()
     if db_path:
         cfg.db_path = Path(db_path).expanduser().resolve()
-    if obsidian_vault:
-        cfg.obsidian_vault = Path(obsidian_vault).expanduser().resolve()
     if rust_index_dir:
         cfg.rust_index_dir = Path(rust_index_dir).expanduser().resolve()
 
-    cfg.obsidian_papers_dir = values.get("obsidian_papers_dir") or cfg.obsidian_papers_dir
-    cfg.obsidian_daily_dir = values.get("obsidian_daily_dir") or cfg.obsidian_daily_dir
     cfg.retrieval_backend = str(values.get("retrieval_backend") or cfg.retrieval_backend)
     cfg.cluster_mode = str(values.get("cluster_mode") or cfg.cluster_mode)
     cfg.storage_backend = str(values.get("storage_backend") or cfg.storage_backend)
@@ -189,4 +179,6 @@ def config_from_kwargs(project_root: Path, values: dict[str, Any]) -> PaperToolC
     cfg.ask_confirmation_mode = str(values.get("ask_confirmation_mode") or cfg.ask_confirmation_mode)
     cfg.ask_session_ttl_sec = int(values.get("ask_session_ttl_sec") or cfg.ask_session_ttl_sec)
     cfg.ask_cli_auto_session = bool(values.get("ask_cli_auto_session", cfg.ask_cli_auto_session))
+    cfg.citation_refresh_on_import = bool(values.get("citation_refresh_on_import", cfg.citation_refresh_on_import))
+    cfg.citation_title_match_mode = str(values.get("citation_title_match_mode") or cfg.citation_title_match_mode)
     return cfg

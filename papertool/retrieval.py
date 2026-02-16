@@ -359,8 +359,11 @@ def synthesize_answer(question: str, hits: list[SearchHit]) -> str:
     lines.append("Best matching evidence from your library:")
     for paper_hits in grouped.values():
         first = paper_hits[0]
+        snippet_preview = re.sub(r"\s+", " ", (first.snippet or "").replace("[", "").replace("]", "")).strip()
+        if len(snippet_preview) > 320:
+            snippet_preview = snippet_preview[:317].rstrip() + "..."
         lines.append(f"- {first.title}")
-        lines.append(f"  {first.snippet}")
+        lines.append(f"  {snippet_preview}")
 
     lines.append("")
     lines.append("Answer draft:")

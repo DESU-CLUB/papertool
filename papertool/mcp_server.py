@@ -8,11 +8,7 @@ from papertool.config import load_config
 from papertool.dashboard import build_medals_dashboard
 from papertool.medals import link_repo_to_paper, recompute_all_medals
 from papertool.graph import export_graph_json
-from papertool.obsidian import (
-    append_quiz_entry_to_paper_note,
-    sync_review_prompts_in_paper_note,
-    upsert_paper_note,
-)
+from papertool.ingest import citation_mentions_preview, rebuild_citation_graph
 from papertool.planner import (
     due_review_questions,
     generate_micro_quiz_for_paper,
@@ -161,7 +157,7 @@ if FastMCP:
     def ask_papers_confirm(
         pending_id: str,
         approve: bool,
-        save_to_obsidian: bool = True,
+        final_answer: str | None = None,
         session_id: str | None = None,
         confirm_mode: str | None = None,
     ) -> dict[str, object]:
@@ -173,7 +169,7 @@ if FastMCP:
                 rt.config,
                 pending_id=pending_id,
                 approve=approve,
-                save_notes=save_to_obsidian,
+                answer_override=final_answer,
                 session_id=session_id,
                 confirm_mode=confirm_mode,
                 channel="mcp",
@@ -186,7 +182,7 @@ if FastMCP:
     def ask_papers(
         question: str,
         top_k: int = 6,
-        save_to_obsidian: bool = True,
+        final_answer: str | None = None,
         topic: str | None = None,
         community_id: str | None = None,
         paper_ids: list[str] | None = None,
@@ -214,7 +210,7 @@ if FastMCP:
                 rt.config,
                 pending_id=str(prepared["pending_id"]),
                 approve=True,
-                save_notes=save_to_obsidian,
+                answer_override=final_answer,
                 session_id=session_id,
                 confirm_mode=str(prepared.get("confirm_mode") or confirm_mode or rt.config.ask_confirmation_mode),
                 channel="mcp",
@@ -222,7 +218,6 @@ if FastMCP:
             committed["auto_committed"] = True
             committed["requires_confirmation"] = False
             return dict(committed)
-        prepared["save_to_obsidian_default"] = bool(save_to_obsidian)
         prepared["message"] = "Call ask_papers_confirm with pending_id to approve or reject logging."
         return prepared
 
@@ -237,33 +232,6 @@ if FastMCP:
         """Generate daily quiz questions weighted toward recently-ingested papers."""
         rt = get_runtime()
         questions = generate_daily_quiz(rt.db, count=count)
-        if rt.config.obsidian_vault:
-            for question in questions:
-                paper = rt.db.get_paper(str(question.paper_id))
-                if not paper:
-                    continue
-                upsert_paper_note(
-                    rt.config,
-                    title=paper["title"],
-                    source_path=paper["path"],
-                    summary=paper["summary"] or "",
-                    doi=paper["doi"],
-                    arxiv_id=paper["arxiv_id"],
-                )
-                append_quiz_entry_to_paper_note(
-                    rt.config,
-                    title=paper["title"],
-                    question=question.prompt,
-                    source="daily",
-                    answered=False,
-                    score=None,
-                )
-                prompts = [str(row["question_text"]) for row in rt.db.quiz_prompts_for_paper(str(question.paper_id), limit=50)]
-                sync_review_prompts_in_paper_note(
-                    rt.config,
-                    title=paper["title"],
-                    prompts=prompts,
-                )
         return {
             "count": len(questions),
             "questions": quiz_to_dict(questions),
@@ -276,32 +244,6 @@ if FastMCP:
         if score is not None and (score < 0 or score > 10):
             return {"ok": False, "error": "score_out_of_range", "question_id": question_id}
         row = rt.db.update_quiz_answer(question_id, user_answer, score)
-        if row and rt.config.obsidian_vault:
-            paper = rt.db.get_paper(str(row["paper_id"]))
-            if paper:
-                upsert_paper_note(
-                    rt.config,
-                    title=paper["title"],
-                    source_path=paper["path"],
-                    summary=paper["summary"] or "",
-                    doi=paper["doi"],
-                    arxiv_id=paper["arxiv_id"],
-                )
-                normalized = None if score is None else (score / 10.0 if score > 1 else score)
-                append_quiz_entry_to_paper_note(
-                    rt.config,
-                    title=paper["title"],
-                    question=str(row["question_text"]),
-                    source=str(row["source"] or "daily"),
-                    answered=True,
-                    score=normalized,
-                )
-                prompts = [str(item["question_text"]) for item in rt.db.quiz_prompts_for_paper(str(row["paper_id"]), limit=50)]
-                sync_review_prompts_in_paper_note(
-                    rt.config,
-                    title=paper["title"],
-                    prompts=prompts,
-                )
         return {"ok": row is not None, "question_id": question_id, "score": score}
 
     @mcp.tool()
@@ -315,6 +257,40 @@ if FastMCP:
             "graph": payload,
             "saved_to": str(output),
         }
+
+    @mcp.tool()
+    def rebuild_citations(paper_id: str | None = None) -> dict[str, object]:
+        """Rebuild citations for all papers or one paper."""
+        rt = get_runtime()
+        return rebuild_citation_graph(
+            rt.db,
+            paper_ids=[paper_id] if paper_id else None,
+            config=rt.config,
+        )
+
+    @mcp.tool()
+    def citation_status() -> dict[str, object]:
+        """Return citation edge totals with reason and confidence breakdown."""
+        rt = get_runtime()
+        return rt.db.citation_status_summary()
+
+    @mcp.tool()
+    def paper_citations(paper_id: str) -> dict[str, object]:
+        """Inspect incoming and outgoing citation edges for one paper."""
+        rt = get_runtime()
+        paper = rt.db.get_paper(paper_id)
+        if not paper:
+            return {"ok": False, "error": "paper_not_found", "paper_id": paper_id}
+        payload = rt.db.citation_edges_for_paper(paper_id)
+        payload["extracted_mentions_preview"] = citation_mentions_preview(
+            rt.db,
+            paper_id=paper_id,
+            mode=rt.config.citation_title_match_mode,
+            limit=80,
+        )
+        payload["ok"] = True
+        payload["paper"] = {"id": str(paper["id"]), "title": str(paper["title"])}
+        return payload
 
     @mcp.tool()
     def import_resource(
@@ -539,32 +515,6 @@ if FastMCP:
             out["resources"] = related_resources_for_paper(rt.db, str(payload["paper_id"]), limit=20)
         if include_quiz:
             questions = generate_micro_quiz_for_paper(rt.db, str(payload["paper_id"]), count=max(1, quiz_count))
-            if rt.config.obsidian_vault:
-                paper = rt.db.get_paper(str(payload["paper_id"]))
-                if paper:
-                    upsert_paper_note(
-                        rt.config,
-                        title=paper["title"],
-                        source_path=paper["path"],
-                        summary=paper["summary"] or "",
-                        doi=paper["doi"],
-                        arxiv_id=paper["arxiv_id"],
-                    )
-                    for question in questions:
-                        append_quiz_entry_to_paper_note(
-                            rt.config,
-                            title=paper["title"],
-                            question=question.prompt,
-                            source="micro",
-                            answered=False,
-                            score=None,
-                        )
-                    prompts = [str(item["question_text"]) for item in rt.db.quiz_prompts_for_paper(str(payload["paper_id"]), limit=50)]
-                    sync_review_prompts_in_paper_note(
-                        rt.config,
-                        title=paper["title"],
-                        prompts=prompts,
-                    )
             out["quiz"] = quiz_to_dict(questions)
         return out
 
