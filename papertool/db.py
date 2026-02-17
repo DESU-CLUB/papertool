@@ -461,6 +461,298 @@ class PaperDB:
         ).fetchall()
         return list(rows)
 
+    def _normalize_arxiv_group_key(self, arxiv_id: str | None) -> str:
+        value = str(arxiv_id or "").strip().lower().replace("arxiv:", "")
+        if not value:
+            return ""
+        return re.sub(r"v\d+$", "", value)
+
+    def _paper_activity_score(self, paper_id: str) -> int:
+        quiz_count = int(self.conn.execute("SELECT COUNT(*) FROM quiz_history WHERE paper_id = ?", (paper_id,)).fetchone()[0])
+        review_count = int(self.conn.execute("SELECT COUNT(*) FROM review_cards WHERE paper_id = ?", (paper_id,)).fetchone()[0])
+        citation_count = int(
+            self.conn.execute(
+                """
+                SELECT COUNT(*) FROM (
+                    SELECT 1 FROM citations WHERE source_paper_id = ?
+                    UNION ALL
+                    SELECT 1 FROM citations WHERE target_paper_id = ?
+                )
+                """,
+                (paper_id, paper_id),
+            ).fetchone()[0]
+        )
+        queue_row = self.conn.execute("SELECT status FROM reading_queue WHERE paper_id = ?", (paper_id,)).fetchone()
+        queue_bonus = 5 if queue_row and str(queue_row["status"]) == "done" else 0
+        resource_links = int(self.conn.execute("SELECT COUNT(*) FROM paper_resource_links WHERE paper_id = ?", (paper_id,)).fetchone()[0])
+        repo_links = int(self.conn.execute("SELECT COUNT(*) FROM paper_repo_links WHERE paper_id = ?", (paper_id,)).fetchone()[0])
+        return quiz_count + review_count + citation_count + queue_bonus + resource_links + repo_links
+
+    def _path_suffix_penalty(self, path_value: str) -> int:
+        name = Path(path_value).name.lower()
+        if re.search(r"[-_](copy|\d+)(?=\.[^.]+$)", name):
+            return 1
+        return 0
+
+    def _choose_canonical_paper(self, rows: list[sqlite3.Row]) -> sqlite3.Row:
+        def rank(row: sqlite3.Row) -> tuple[int, int, int, int, int, int, str, str]:
+            paper_id = str(row["id"])
+            activity = self._paper_activity_score(paper_id)
+            has_doi = 1 if row["doi"] else 0
+            has_arxiv = 1 if row["arxiv_id"] else 0
+            text_len = len(str(row["full_text"] or ""))
+            penalty = self._path_suffix_penalty(str(row["path"] or ""))
+            path_len = len(str(Path(str(row["path"] or "")).name))
+            ingested = str(row["ingested_at"] or "")
+            return (-activity, -has_doi, -has_arxiv, -text_len, penalty, path_len, ingested, paper_id)
+
+        return sorted(rows, key=rank)[0]
+
+    def _merge_queue_rows(self, keep_id: str, drop_id: str) -> None:
+        keep = self.conn.execute("SELECT * FROM reading_queue WHERE paper_id = ?", (keep_id,)).fetchone()
+        drop = self.conn.execute("SELECT * FROM reading_queue WHERE paper_id = ?", (drop_id,)).fetchone()
+        if not drop:
+            return
+        if not keep:
+            self.conn.execute("UPDATE reading_queue SET paper_id = ? WHERE paper_id = ?", (keep_id, drop_id))
+            return
+
+        status_rank = {"done": 5, "today": 4, "next": 3, "inbox": 2, "later": 1}
+        keep_status = str(keep["status"] or "inbox")
+        drop_status = str(drop["status"] or "inbox")
+        merged_status = keep_status if status_rank.get(keep_status, 0) >= status_rank.get(drop_status, 0) else drop_status
+        merged_priority = max(float(keep["priority"] or 1.0), float(drop["priority"] or 1.0))
+        merged_added = min(str(keep["added_at"] or ""), str(drop["added_at"] or ""))
+        merged_updated = max(str(keep["updated_at"] or ""), str(drop["updated_at"] or ""))
+        merged_planned = max(str(keep["last_planned_for"] or ""), str(drop["last_planned_for"] or ""))
+        merged_completed = max(str(keep["completed_at"] or ""), str(drop["completed_at"] or ""))
+        self.conn.execute(
+            """
+            UPDATE reading_queue
+            SET status = ?, priority = ?, added_at = ?, updated_at = ?,
+                last_planned_for = ?, completed_at = ?
+            WHERE paper_id = ?
+            """,
+            (
+                merged_status,
+                merged_priority,
+                merged_added,
+                merged_updated,
+                merged_planned or None,
+                merged_completed or None,
+                keep_id,
+            ),
+        )
+        self.conn.execute("DELETE FROM reading_queue WHERE paper_id = ?", (drop_id,))
+
+    def _merge_paper_medals(self, keep_id: str, drop_id: str) -> None:
+        keep = self.conn.execute("SELECT * FROM paper_medals WHERE paper_id = ?", (keep_id,)).fetchone()
+        drop = self.conn.execute("SELECT * FROM paper_medals WHERE paper_id = ?", (drop_id,)).fetchone()
+        if not drop:
+            return
+        if not keep:
+            self.conn.execute("UPDATE paper_medals SET paper_id = ? WHERE paper_id = ?", (keep_id, drop_id))
+            return
+
+        def _pick_earliest(a: str | None, b: str | None) -> str | None:
+            values = [str(v) for v in (a, b) if v]
+            return min(values) if values else None
+
+        def _pick_latest(a: str | None, b: str | None) -> str | None:
+            values = [str(v) for v in (a, b) if v]
+            return max(values) if values else None
+
+        bronze_awarded_at = _pick_earliest(keep["bronze_awarded_at"], drop["bronze_awarded_at"])
+        silver_awarded_at = _pick_earliest(keep["silver_awarded_at"], drop["silver_awarded_at"])
+        silver_revoked_at = _pick_latest(keep["silver_revoked_at"], drop["silver_revoked_at"])
+        gold_awarded_at = _pick_earliest(keep["gold_awarded_at"], drop["gold_awarded_at"])
+        silver_active = 1 if int(keep["silver_active"] or 0) or int(drop["silver_active"] or 0) else 0
+        gold_repo_url = str(keep["gold_repo_url"] or "") or str(drop["gold_repo_url"] or "")
+        self.conn.execute(
+            """
+            UPDATE paper_medals
+            SET bronze_awarded_at = ?, silver_awarded_at = ?, silver_active = ?,
+                silver_revoked_at = ?, gold_awarded_at = ?, gold_repo_url = ?, updated_at = ?
+            WHERE paper_id = ?
+            """,
+            (
+                bronze_awarded_at,
+                silver_awarded_at,
+                silver_active,
+                silver_revoked_at,
+                gold_awarded_at,
+                gold_repo_url or None,
+                utc_now_iso(),
+                keep_id,
+            ),
+        )
+        self.conn.execute("DELETE FROM paper_medals WHERE paper_id = ?", (drop_id,))
+
+    def _replace_paper_id_in_json_arrays(self, table: str, id_col: str, json_col: str, keep_id: str, drop_id: str) -> None:
+        rows = self.conn.execute(f"SELECT {id_col}, {json_col} FROM {table}").fetchall()
+        for row in rows:
+            key = row[id_col]
+            try:
+                values = [str(item) for item in json.loads(str(row[json_col] or "[]"))]
+            except json.JSONDecodeError:
+                continue
+            changed = False
+            replaced: list[str] = []
+            seen: set[str] = set()
+            for value in values:
+                next_value = keep_id if value == drop_id else value
+                if next_value not in seen:
+                    replaced.append(next_value)
+                    seen.add(next_value)
+                if next_value != value:
+                    changed = True
+            if changed:
+                self.conn.execute(
+                    f"UPDATE {table} SET {json_col} = ? WHERE {id_col} = ?",
+                    (json.dumps(replaced, ensure_ascii=True), key),
+                )
+
+    def _merge_paper_records(self, keep_id: str, drop_id: str) -> None:
+        if keep_id == drop_id:
+            return
+        keep = self.conn.execute("SELECT * FROM papers WHERE id = ?", (keep_id,)).fetchone()
+        drop = self.conn.execute("SELECT * FROM papers WHERE id = ?", (drop_id,)).fetchone()
+        if not keep or not drop:
+            return
+
+        keep_summary = str(keep["summary"] or "")
+        drop_summary = str(drop["summary"] or "")
+        keep_text = str(keep["full_text"] or "")
+        drop_text = str(drop["full_text"] or "")
+        merged_summary = keep_summary if len(keep_summary) >= len(drop_summary) else drop_summary
+        merged_text = keep_text if len(keep_text) >= len(drop_text) else drop_text
+
+        self.conn.execute("BEGIN")
+        try:
+            self.conn.execute(
+                """
+                UPDATE papers
+                SET doi = COALESCE(NULLIF(doi, ''), ?),
+                    arxiv_id = COALESCE(NULLIF(arxiv_id, ''), ?),
+                    published_date = COALESCE(NULLIF(published_date, ''), ?),
+                    summary = ?,
+                    full_text = ?
+                WHERE id = ?
+                """,
+                (
+                    drop["doi"],
+                    drop["arxiv_id"],
+                    drop["published_date"],
+                    merged_summary,
+                    merged_text,
+                    keep_id,
+                ),
+            )
+
+            keep_chunk_count = int(self.conn.execute("SELECT COUNT(*) FROM chunks WHERE paper_id = ?", (keep_id,)).fetchone()[0])
+            if keep_chunk_count == 0:
+                self.conn.execute("UPDATE OR IGNORE chunks SET paper_id = ? WHERE paper_id = ?", (keep_id, drop_id))
+                self.conn.execute("UPDATE OR IGNORE chunk_fts SET paper_id = ? WHERE paper_id = ?", (keep_id, drop_id))
+
+            self.conn.execute("UPDATE OR IGNORE citations SET source_paper_id = ? WHERE source_paper_id = ?", (keep_id, drop_id))
+            self.conn.execute("UPDATE OR IGNORE citations SET target_paper_id = ? WHERE target_paper_id = ?", (keep_id, drop_id))
+            self.conn.execute("DELETE FROM citations WHERE source_paper_id = target_paper_id")
+
+            for table in (
+                "quiz_history",
+                "review_cards",
+                "paper_topic_scores",
+                "citation_communities",
+                "daily_qualified_papers",
+                "paper_repo_links",
+                "paper_resource_links",
+            ):
+                self.conn.execute(f"UPDATE OR IGNORE {table} SET paper_id = ? WHERE paper_id = ?", (keep_id, drop_id))
+
+            self._merge_queue_rows(keep_id, drop_id)
+            self._merge_paper_medals(keep_id, drop_id)
+
+            self.conn.execute("UPDATE medal_events SET paper_id = ? WHERE paper_id = ?", (keep_id, drop_id))
+            self._replace_paper_id_in_json_arrays("qa_log", "id", "paper_ids", keep_id, drop_id)
+            self._replace_paper_id_in_json_arrays("pending_ask_sessions", "id", "paper_ids_json", keep_id, drop_id)
+            self._replace_paper_id_in_json_arrays("ask_scope_locks", "session_id", "paper_ids_json", keep_id, drop_id)
+
+            self.conn.execute("DELETE FROM chunk_fts WHERE paper_id = ?", (drop_id,))
+            self.conn.execute("DELETE FROM papers WHERE id = ?", (drop_id,))
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
+
+    def dedupe_papers_by_arxiv(
+        self,
+        *,
+        title_filters: list[str] | None = None,
+        apply: bool = True,
+    ) -> dict[str, Any]:
+        filters = [str(item).strip().lower() for item in (title_filters or []) if str(item).strip()]
+        rows = self.conn.execute(
+            """
+            SELECT id, title, path, doi, arxiv_id, published_date, summary, full_text, ingested_at
+            FROM papers
+            WHERE arxiv_id IS NOT NULL AND trim(arxiv_id) <> ''
+            ORDER BY ingested_at ASC
+            """
+        ).fetchall()
+        grouped: dict[str, list[sqlite3.Row]] = {}
+        for row in rows:
+            title = str(row["title"] or "").lower()
+            if filters and not any(token in title for token in filters):
+                continue
+            key = self._normalize_arxiv_group_key(str(row["arxiv_id"] or ""))
+            if not key:
+                continue
+            grouped.setdefault(key, []).append(row)
+
+        groups_payload: list[dict[str, Any]] = []
+        merge_plan: list[tuple[str, str]] = []
+        for arxiv_key, items in grouped.items():
+            if len(items) < 2:
+                continue
+            keep = self._choose_canonical_paper(items)
+            keep_id = str(keep["id"])
+            drops = [str(item["id"]) for item in items if str(item["id"]) != keep_id]
+            for drop_id in drops:
+                merge_plan.append((keep_id, drop_id))
+            groups_payload.append(
+                {
+                    "arxiv_id": arxiv_key,
+                    "keep_id": keep_id,
+                    "drop_ids": drops,
+                    "papers": [
+                        {
+                            "id": str(item["id"]),
+                            "title": str(item["title"]),
+                            "path": str(item["path"]),
+                            "ingested_at": str(item["ingested_at"]),
+                        }
+                        for item in items
+                    ],
+                }
+            )
+
+        merged: list[dict[str, str]] = []
+        if apply:
+            for keep_id, drop_id in merge_plan:
+                self._merge_paper_records(keep_id, drop_id)
+                merged.append({"keep_id": keep_id, "drop_id": drop_id})
+
+        return {
+            "ok": True,
+            "apply": bool(apply),
+            "filters": filters,
+            "groups_count": len(groups_payload),
+            "planned_merge_count": len(merge_plan),
+            "merged_count": len(merged),
+            "groups": groups_payload,
+            "merged": merged,
+        }
+
     def paper_id_candidates(self, paper_id: str, limit: int = 20) -> list[sqlite3.Row]:
         value = str(paper_id or "").strip()
         if not value:
