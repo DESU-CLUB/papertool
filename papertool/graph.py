@@ -51,11 +51,12 @@ def export_graph_html(db: PaperDB, output_path: Path) -> Path:
   <script>
     const data = {data_json};
     const svg = d3.select('#root');
-    const width = window.innerWidth;
-    const height = window.innerHeight;
+    let width = window.innerWidth;
+    let height = window.innerHeight;
     svg.attr('viewBox', [0, 0, width, height]);
+    const viewport = svg.append('g').attr('class', 'viewport');
 
-    const link = svg.append('g')
+    const link = viewport.append('g')
       .attr('stroke', '#93a4d2')
       .selectAll('line')
       .data(data.links)
@@ -68,7 +69,7 @@ def export_graph_html(db: PaperDB, output_path: Path) -> Path:
       .force('charge', d3.forceManyBody().strength(-260))
       .force('center', d3.forceCenter(width / 2, height / 2));
 
-    const node = svg.append('g')
+    const node = viewport.append('g')
       .attr('stroke', '#1f2937')
       .attr('stroke-width', 1)
       .selectAll('circle')
@@ -78,7 +79,7 @@ def export_graph_html(db: PaperDB, output_path: Path) -> Path:
       .attr('fill', '#1d4ed8')
       .call(drag(simulation));
 
-    const label = svg.append('g')
+    const label = viewport.append('g')
       .selectAll('text')
       .data(data.nodes)
       .join('text')
@@ -87,6 +88,38 @@ def export_graph_html(db: PaperDB, output_path: Path) -> Path:
       .attr('fill', '#111827');
 
     const tooltip = d3.select('body').append('div').attr('class', 'tooltip').style('opacity', 0);
+    const zoom = d3.zoom()
+      .scaleExtent([0.2, 4])
+      .on('zoom', (event) => {{
+        viewport.attr('transform', event.transform);
+      }});
+    svg.call(zoom);
+    svg.on('dblclick.zoom', null);
+
+    function fitToScreen(animate = true) {{
+      const positioned = data.nodes.filter(d => Number.isFinite(d.x) && Number.isFinite(d.y));
+      if (!positioned.length) return;
+
+      const minX = d3.min(positioned, d => d.x);
+      const maxX = d3.max(positioned, d => d.x);
+      const minY = d3.min(positioned, d => d.y);
+      const maxY = d3.max(positioned, d => d.y);
+      if (![minX, maxX, minY, maxY].every(Number.isFinite)) return;
+
+      const boundsWidth = Math.max(1, maxX - minX);
+      const boundsHeight = Math.max(1, maxY - minY);
+      const margin = 36;
+      const scale = Math.max(0.2, Math.min(3, Math.min(
+        (width - margin * 2) / boundsWidth,
+        (height - margin * 2) / boundsHeight
+      )));
+      const tx = width / 2 - ((minX + maxX) / 2) * scale;
+      const ty = height / 2 - ((minY + maxY) / 2) * scale;
+      const transform = d3.zoomIdentity.translate(tx, ty).scale(scale);
+
+      const target = animate ? svg.transition().duration(300) : svg;
+      target.call(zoom.transform, transform);
+    }}
 
     node
       .on('mouseover', (event, d) => {{
@@ -112,6 +145,17 @@ def export_graph_html(db: PaperDB, output_path: Path) -> Path:
         .attr('x', d => d.x + 10)
         .attr('y', d => d.y + 4);
     }});
+    simulation.on('end', () => {{
+      fitToScreen(true);
+    }});
+
+    window.addEventListener('resize', () => {{
+      width = window.innerWidth;
+      height = window.innerHeight;
+      svg.attr('viewBox', [0, 0, width, height]);
+      fitToScreen(false);
+    }});
+    svg.on('dblclick', () => fitToScreen(true));
 
     function drag(simulation) {{
       function dragstarted(event, d) {{

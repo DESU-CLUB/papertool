@@ -1063,8 +1063,21 @@ def graph_export(
     output: str = typer.Option(".papertool/graph.json", help="Output file path"),
     format: str = typer.Option("json", help="One of: json, mermaid, html"),
 ) -> None:
-    db, _cfg = _db()
+    db, cfg = _db()
     try:
+        rebuild_result = rebuild_citation_graph(db, config=cfg)
+        if not bool(rebuild_result.get("ok", False)):
+            typer.echo(
+                f"Citation rebuild failed: {json.dumps(rebuild_result, ensure_ascii=True)}",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+        typer.echo(
+            "Citation rebuild:"
+            f" processed={int(rebuild_result.get('processed', 0))}"
+            f" edges_set={int(rebuild_result.get('edges_set', 0))}"
+        )
+
         out = Path(output).expanduser().resolve()
         fmt = format.lower()
         if fmt == "json":
