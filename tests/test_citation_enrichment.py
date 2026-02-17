@@ -125,3 +125,46 @@ def test_citation_status_summary_counts_reasons() -> None:
         assert len(inspect["outgoing"]) == 1
         assert len(inspect["incoming"]) == 0
         db.close()
+
+
+def test_rebuild_accepts_unique_paper_id_prefix() -> None:
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        db = PaperDB(root / "db.sqlite")
+        db.initialize()
+        _seed_paper(
+            db,
+            root,
+            "70248ec2bbbbbbbb",
+            "YARN: Efficient context window extension of large language models",
+            "YARN paper body.",
+            arxiv_id="2309.00071",
+            year="2023",
+        )
+        _seed_paper(
+            db,
+            root,
+            "9047bb47aaaaaaaa",
+            "DeepSeek-V2",
+            """
+            DeepSeek-V2 paper body.
+
+            References
+            B. Peng, J. Quesnelle, H. Fan, and E. Shippole.
+            Yarn: Efficient context window extension of large language models.
+            arXiv preprint arXiv:2309.00071, 2023.
+            """,
+            year="2024",
+        )
+
+        result = rebuild_citation_graph(db, paper_ids=["9047bb47"])
+        assert result["ok"] is True
+        assert result["processed"] == 1
+        assert "9047bb47aaaaaaaa" in result["resolved_ids"]
+        assert result["unresolved_ids"] == []
+        edges = db.citation_edges_for_paper("9047bb47")
+        assert any(
+            row["target_paper_id"] == "70248ec2bbbbbbbb" and str(row["reason"]).startswith("arxiv:")
+            for row in edges["outgoing"]
+        )
+        db.close()

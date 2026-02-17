@@ -273,13 +273,25 @@ def rebuild_citation_graph(
     cfg = _effective_citation_config(db, config)
 
     all_papers = db.papers_minimal_for_citation_match()
-    source_ids = {str(item).strip() for item in (paper_ids or []) if str(item).strip()}
+    requested_ids = [str(item).strip() for item in (paper_ids or []) if str(item).strip()]
+    source_ids: set[str] = set()
+    unresolved_ids: list[str] = []
+    for raw_id in requested_ids:
+        resolved = db.resolve_paper_id(raw_id)
+        if resolved:
+            source_ids.add(resolved)
+        else:
+            unresolved_ids.append(raw_id)
     source_papers = [paper for paper in all_papers if not source_ids or str(paper["id"]) in source_ids]
-    if not source_papers:
+    if requested_ids and not source_papers:
         return {
-            "ok": True,
+            "ok": False,
             "processed": 0,
             "edges_set": 0,
+            "requested": requested_ids,
+            "resolved_ids": sorted(source_ids),
+            "unresolved_ids": unresolved_ids,
+            "error": "no_source_papers_resolved",
         }
 
     doi_to_paper: dict[str, str] = {}
@@ -333,6 +345,9 @@ def rebuild_citation_graph(
         "ok": True,
         "processed": len(source_papers),
         "edges_set": total_edges,
+        "requested": requested_ids,
+        "resolved_ids": sorted(source_ids),
+        "unresolved_ids": unresolved_ids,
     }
 
 
