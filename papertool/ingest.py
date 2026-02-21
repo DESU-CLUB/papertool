@@ -23,6 +23,18 @@ from papertool.db import PaperDB
 from papertool.models import PaperRecord
 
 SUPPORTED_SUFFIXES = {".pdf", ".md", ".txt"}
+_TITLE_SKIP_PREFIXES = (
+    "arxiv:",
+    "published as",
+    "accepted at",
+    "accepted to",
+    "under review",
+    "preprint",
+    "camera ready",
+    "this version",
+    "code:",
+    "abstract",
+)
 
 
 def _sha1(text: str) -> str:
@@ -66,12 +78,59 @@ def extract_text(path: Path, max_chars: int = 180_000) -> str:
 
 
 def extract_title(path: Path, text: str) -> str:
-    if text:
-        for line in text.splitlines()[:30]:
-            clean = line.strip()
-            if len(clean) >= 15 and not clean.lower().startswith("arxiv"):
-                return clean[:220]
-    return path.stem.replace("_", " ").replace("-", " ")
+    fallback = path.stem.replace("_", " ").replace("-", " ")
+    if not text:
+        return fallback
+
+    lines = [re.sub(r"\s+", " ", line).strip() for line in text.splitlines()[:80]]
+    lines = [line for line in lines if line]
+    for idx, line in enumerate(lines):
+        if not _is_candidate_title_line(line):
+            continue
+        candidate = line
+        if _looks_uppercase_title_line(line):
+            parts = [line]
+            cursor = idx + 1
+            while cursor < len(lines) and len(parts) < 3:
+                next_line = lines[cursor]
+                if not _is_candidate_title_line(next_line):
+                    break
+                if not _looks_uppercase_title_line(next_line):
+                    break
+                parts.append(next_line)
+                cursor += 1
+            candidate = " ".join(parts)
+        candidate = re.sub(r"\s*:\s*", ": ", candidate).strip()
+        if len(candidate) >= 15:
+            return candidate[:220]
+    return fallback
+
+
+def _is_candidate_title_line(line: str) -> bool:
+    clean = line.strip()
+    if len(clean) < 12:
+        return False
+    lower = clean.lower()
+    if lower.startswith(_TITLE_SKIP_PREFIXES):
+        return False
+    if "@" in clean:
+        return False
+    if "http://" in lower or "https://" in lower:
+        return False
+    if re.match(r"^\d+(\.\d+)*\s", clean):
+        return False
+    token_count = len(re.findall(r"[A-Za-z0-9]+", clean))
+    if token_count < 3:
+        return False
+    return True
+
+
+def _looks_uppercase_title_line(line: str) -> bool:
+    letters = [ch for ch in line if ch.isalpha()]
+    if len(letters) < 8:
+        return False
+    upper = sum(1 for ch in letters if ch.isupper())
+    return (upper / len(letters)) >= 0.8
 
 
 def extract_summary(text: str) -> str:

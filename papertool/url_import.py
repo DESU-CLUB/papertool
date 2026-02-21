@@ -72,7 +72,9 @@ def detect_resource_kind(url: str) -> str:
     host = parsed.netloc.lower()
     path = parsed.path.lower()
 
-    if host in {"arxiv.org", "www.arxiv.org"} and (path.startswith("/abs/") or path.startswith("/pdf/")):
+    if host in {"arxiv.org", "www.arxiv.org"} and (
+        path.startswith("/abs/") or path.startswith("/pdf/") or path.startswith("/html/")
+    ):
         return "arxiv"
     if path.endswith(".pdf"):
         return "pdf"
@@ -108,6 +110,8 @@ def extract_arxiv_id_from_url(url: str) -> str | None:
         raw = path.removeprefix("/abs/")
     elif path.startswith("/pdf/"):
         raw = path.removeprefix("/pdf/")
+    elif path.startswith("/html/"):
+        raw = path.removeprefix("/html/")
     else:
         return None
 

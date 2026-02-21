@@ -17,6 +17,7 @@ from papertool.url_import import (
 def test_detect_resource_kind_for_known_sources() -> None:
     assert detect_resource_kind("https://arxiv.org/abs/2205.14135") == "arxiv"
     assert detect_resource_kind("https://arxiv.org/pdf/2205.14135.pdf") == "arxiv"
+    assert detect_resource_kind("https://arxiv.org/html/2602.15030v1") == "arxiv"
     assert detect_resource_kind("https://example.com/paper.pdf") == "pdf"
     assert detect_resource_kind("https://github.com/owner/repo") == "github"
     assert detect_resource_kind("https://x.com/user/status/123") == "x_post"
@@ -25,6 +26,7 @@ def test_detect_resource_kind_for_known_sources() -> None:
 
 def test_arxiv_abs_to_pdf_conversion() -> None:
     assert arxiv_abs_to_pdf("https://arxiv.org/abs/2205.14135") == "https://arxiv.org/pdf/2205.14135.pdf"
+    assert arxiv_abs_to_pdf("https://arxiv.org/html/2602.15030v1") == "https://arxiv.org/pdf/2602.15030v1.pdf"
 
 
 def test_normalize_input_url_adds_https() -> None:
@@ -34,6 +36,7 @@ def test_normalize_input_url_adds_https() -> None:
 def test_extract_arxiv_id_from_arxiv_urls() -> None:
     assert extract_arxiv_id_from_url("https://arxiv.org/abs/2205.14135") == "2205.14135"
     assert extract_arxiv_id_from_url("https://arxiv.org/pdf/2205.14135.pdf") == "2205.14135"
+    assert extract_arxiv_id_from_url("https://arxiv.org/html/2602.15030v1") == "2602.15030v1"
 
 
 def test_canonicalize_arxiv_id_drops_version() -> None:
