@@ -18,3 +18,11 @@ papertool.toml
 rust/**/target/
 rust/**/Cargo.lock
 uv.lock
+
+# Local-only VibeCommit assets
+vibecommit.toml
+.vibeignore
+.githooks/
+scripts/vibecheck-*.sh
+.github/workflows/vibecommit.yml
+.github/workflows/vibecommit.yml.example
