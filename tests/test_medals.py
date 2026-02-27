@@ -185,4 +185,15 @@ def test_dashboard_generation_writes_html_with_medal_summary() -> None:
         assert "PaperTool Streaks & Medals" in body
         assert "Bronze / Silver / Gold" in body
         assert "Paper 3" in body
+        assert "--medal-bronze: #b45309;" in body
+        assert "--medal-silver: #9ca3af;" in body
+        assert "--medal-gold: #ca8a04;" in body
+        assert "--medal-muted: #94a3b8;" in body
+        assert '.medal-bronze { background: var(--medal-bronze); color: #ffffff; }' in body
+        assert '.medal-silver { background: var(--medal-silver); color: #111827; }' in body
+        assert '.medal-gold { background: var(--medal-gold); color: #111827; }' in body
+        assert '.medal-muted { background: var(--medal-muted); color: #0f172a; }' in body
+        assert 'class="badge medal-bronze">Bronze</span>' in body
+        assert 'class="badge medal-muted">Silver</span>' in body
+        assert 'class="badge medal-muted">Gold</span>' in body
         db.close()

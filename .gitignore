@@ -1,3 +1,6 @@
+.manim-slides/
+slides/
+media/
 __pycache__/
 .pytest_cache/
 .venv/
@@ -9,7 +12,9 @@ build/
 .context/
 deploy/.env
 library/
+papertool.toml
 
 # Rust build artifacts
 rust/**/target/
 rust/**/Cargo.lock
+uv.lock

@@ -31,6 +31,63 @@ source .venv/bin/activate
 uv pip install -e '.[dev]'
 ```
 
+## Claude + Codex Skill Pack
+
+This repo now includes a local Claude plugin and canonical skills under `skills/`.
+
+Plugin manifest:
+- `.claude-plugin/plugin.json`
+
+Skill source of truth:
+- `skills/papertool/SKILL.md`
+- `skills/obsidian-papertool/SKILL.md`
+- `skills/manim-slides/SKILL.md`
+
+Manim subskill references:
+- `skills/manim-slides/references/reverse-knowledge-tree.md`
+- `skills/manim-slides/references/manim-code-patterns.md`
+- `skills/manim-slides/references/benchmark-motifs.md`
+- `skills/manim-slides/references/visual-planner.md`
+- `skills/manim-slides/references/verbose-prompt-format.md`
+- `skills/manim-slides/references/manim-slides-api-cheatsheet.md`
+
+Manim phase contract (strict order):
+1. reverse-knowledge-tree
+2. manim-code-patterns
+3. visual-planner
+4. verbose-prompt-builder
+5. code synthesis
+6. hard-gated renderability checks
+
+Manim topic cache path:
+- `.manim-slides/<topic-slug>/`
+
+Required cache artifacts:
+- `knowledge_tree.json`
+- `concept_plan.json`
+- `visual_plan.json`
+- `verbose_prompt.md`
+- `slides.py`
+- `render_report.json`
+
+Install plugin in Claude Code:
+
+```text
+/plugin install /Users/warrenlow/Documents/projects/papertool
+```
+
+Sync skill targets:
+
+```bash
+/Users/warrenlow/Documents/projects/papertool/scripts/sync-skill-targets.sh
+```
+
+Optional mirrors:
+
+```bash
+/Users/warrenlow/Documents/projects/papertool/scripts/sync-skill-targets.sh --mirror-codex-home --mirror-claude-home
+```
+
 ## Run It (Quickstart)
 
 ```bash

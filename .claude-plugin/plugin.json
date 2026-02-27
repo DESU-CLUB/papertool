@@ -1,0 +1,8 @@
+{
+  "name": "papertool-skill-pack",
+  "version": "0.1.0",
+  "description": "Local skill pack for PaperTool workflows, Obsidian study logging, and Manim Slides generation.",
+  "author": {
+    "name": "Warren Low"
+  }
+}

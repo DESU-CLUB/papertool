@@ -120,9 +120,7 @@ def tag_resource_topics(
     heuristic = match_existing_topics_from_text(db, heuristic_text or "")
     seen: set[str] = set()
     for label in manual:
-        topic_id = db.topic_id_for_label(label)
-        if not topic_id:
-            continue
+        topic_id = db.upsert_topic(label, source="manual")
         db.upsert_resource_topic(resource_id, topic_id, score=1.0, source="manual")
         seen.add(topic_id)
     for label in heuristic:

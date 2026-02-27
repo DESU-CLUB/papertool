@@ -14,3 +14,21 @@ If `vibecommit.toml` exists at repository root and is enabled:
 7. Never bypass hooks (`--no-verify` is forbidden).
 
 If agent token creation fails or any answer is not correct, stop and ask the human to resolve before committing.
+
+# Obsidian Logging Policy (PaperTool)
+
+For PaperTool study interactions, treat saving to Obsidian as the default workflow when notes are requested.
+
+Vault path:
+- `/Users/warrenlow/Documents/llm-notes`
+
+Note format contract:
+- `## Summary` for concise paper/session summary
+- `## Notes` for normal ask/discussion notes
+- `## Q&A` for quiz/review prompts and answers
+
+Mapping rule:
+- `papertool ask`/discussion -> `## Notes`
+- PaperTool quiz/review prompts -> `## Q&A`
+
+Do not log raw retrieval chunks as final notes.
