@@ -1,4 +1,4 @@
-# PaperTool Main Server Setup (`spooky@ghost`)
+# PaperTool Main Server Setup (`<USER>@<SERVER>`)
 
 This sets up your shared PaperTool backend on your tailnet:
 - CouchDB (`papertool_meta`, `papertool_events`, `papertool_jobs`)
@@ -7,7 +7,7 @@ This sets up your shared PaperTool backend on your tailnet:
 - PaperTool worker (processes queued captures)
 - PaperTool sync daemon (auto-pulls remote changes into server cache)
 
-## 1) Prerequisites on `spooky@ghost`
+## 1) Prerequisites on `<USER>@<SERVER>`
 
 Install:
 - Docker + Docker Compose plugin
@@ -25,7 +25,7 @@ tailscale ip -4
 ## 2) Clone and enter repo on server
 
 ```bash
-ssh spooky@ghost
+ssh <USER>@<SERVER>
 cd /path/to
 git clone <your-papertool-repo-url> papertool
 cd papertool
@@ -38,7 +38,7 @@ cp deploy/.env.example deploy/.env
 ```
 
 Edit `deploy/.env`:
-- `TAILSCALE_BIND_IP=<your spooky@ghost tailscale IPv4>` (from `tailscale ip -4`)
+- `TAILSCALE_BIND_IP=<your <USER>@<SERVER> tailscale IPv4>` (from `tailscale ip -4`)
 - strong values for:
   - `COUCHDB_PASSWORD`
   - `MINIO_ROOT_PASSWORD`
@@ -74,7 +74,7 @@ What bootstrap does:
 
 ## 6) Verify server health
 
-From `spooky@ghost`:
+From `<USER>@<SERVER>`:
 
 ```bash
 source deploy/.env
@@ -129,18 +129,7 @@ Extension behavior:
 - queues captures durably in `chrome.storage.local`
 - retries failed uploads with exponential backoff (30s to 30m with jitter)
 
-## 9) Optional integration test for `spooky@ghost`
-
-From a client with repo checked out:
-
-```bash
-export PAPERTOOL_REMOTE_API_TOKEN="<token>"
-pytest -m integration -k spooky_access
-```
-
-The test SSHes to `spooky@ghost` and calls `http://127.0.0.1:18443/v1/health`.
-
-## Operations
+## 9) Operations
 
 Update stack:
 

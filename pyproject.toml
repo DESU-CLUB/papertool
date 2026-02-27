@@ -37,7 +37,7 @@ include = ["papertool*"]
 testpaths = ["tests"]
 addopts = "-m \"not integration\""
 markers = [
-  "integration: tests that require external infrastructure such as spooky@ghost",
+  "integration: tests that require external infrastructure",
 ]
 
 [tool.maturin]

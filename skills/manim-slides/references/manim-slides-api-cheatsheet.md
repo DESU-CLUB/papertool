@@ -16,10 +16,10 @@ Use `next_slide()` at concept boundaries and major reveal boundaries.
 
 ## CLI Workflow
 
-Wrapper command prefix:
+Wrapper command prefix (from repo root):
 
 ```bash
-/Users/warrenlow/Documents/projects/papertool/scripts/skill-runtime/run-manim-slides.sh
+scripts/skill-runtime/run-manim-slides.sh
 ```
 
 Common commands:

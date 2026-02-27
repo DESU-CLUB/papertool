@@ -341,7 +341,7 @@ papertool migrate verify
 
 For a Docker-based distributed deployment (CouchDB + MinIO + API + worker), see:
 - `deploy/docker-compose.yml`
-- `deploy/README.md` (includes full `spooky@ghost` setup runbook)
+- `deploy/README.md` (includes full `<USER>@<SERVER>` setup runbook)
 
 Export graph:
 
@@ -478,7 +478,7 @@ A starter Chrome extension is included at `chrome-extension/` that sends the cur
 4. Click \"Load unpacked\" and choose `chrome-extension/`.
 5. Open arXiv, Google Search, or Google Scholar; inline `Save to PaperTool` buttons appear beside paper-like result titles.
 6. (Optional) Use extension popup to capture any current tab URL.
-7. For distributed mode, set popup endpoint to your Tailscale host, e.g. `http://ghost:18443`, and set Bearer token.
+7. For distributed mode, set popup endpoint to your Tailscale host, e.g. `http://<SERVER>:18443`, and set Bearer token.
 
 Upload reliability:
 - Queue is durable in `chrome.storage.local`.
@@ -519,9 +519,4 @@ Parity check only:
 
 ```bash
 pytest
-pytest -m integration -k spooky_access
 ```
-
-Integration note:
-- `tests/integration/test_spooky_access.py` runs `ssh spooky@ghost "curl .../v1/health"`.
-- If `spooky@ghost` is unreachable or requires interactive Tailscale SSH auth, it is skipped.

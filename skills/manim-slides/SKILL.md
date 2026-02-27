@@ -1,67 +1,72 @@
 ---
 name: manim-slides
-description: Create animated presentations with Manim Slides from user prompts. Use when the user asks to make slides, generate an animated deck, present with Manim Slides, convert Manim slides to html/pdf/video, or build speaker-note-ready math/technical presentations.
+description: Template skill for creating Manim Slides decks. Discover local paths and wrappers first, then run the knowledge-first generation pipeline.
 ---
 
-# Manim Slides Skill
+# Manim Slides Skill (Template)
 
-Use this skill to produce high-quality Manim Slides decks with a strict knowledge-first pipeline.
+This is a template. Do not assume fixed absolute paths.
 
-## Contract (Mandatory)
+## Path Discovery (Required First)
 
-Execute phases in exact order for every run:
+Find repo root, then use repo-relative paths:
 
-1. `Subskill A: reverse-knowledge-tree`
-2. `Subskill B: manim-code-patterns`
-3. `Subskill C: visual-planner`
-4. `Subskill D: verbose-prompt-builder`
-5. `Slide code synthesis from verbose prompt`
-6. `Hard-gated renderability checks`
+- `scripts/skill-runtime/run-manim-slides.sh`
+- `skills/manim-slides/references`
+- `.manim-slides`
 
-Do not skip phases unless the user explicitly requests a phase override.
-
-## Internal Subskills (Load Order)
-
-Load and apply these references in sequence:
-
-1. `/Users/warrenlow/Documents/projects/papertool/skills/manim-slides/references/reverse-knowledge-tree.md`
-2. `/Users/warrenlow/Documents/projects/papertool/skills/manim-slides/references/manim-code-patterns.md`
-3. `/Users/warrenlow/Documents/projects/papertool/skills/manim-slides/references/benchmark-motifs.md`
-4. `/Users/warrenlow/Documents/projects/papertool/skills/manim-slides/references/visual-planner.md`
-5. `/Users/warrenlow/Documents/projects/papertool/skills/manim-slides/references/verbose-prompt-format.md`
-6. `/Users/warrenlow/Documents/projects/papertool/skills/manim-slides/references/manim-slides-api-cheatsheet.md`
-
-Output of each subskill is input to the next subskill.
-
-## Runtime (No Manual Venv)
-
-Use wrappers first:
+Suggested discovery commands:
 
 ```bash
-/Users/warrenlow/Documents/projects/papertool/scripts/skill-runtime/run-manim-slides.sh <args>
+pwd
+rg --files | rg '^scripts/skill-runtime/run-manim-slides.sh$|^skills/manim-slides/references/|^pyproject.toml$'
+find ~ -type f -path '*/scripts/skill-runtime/run-manim-slides.sh' 2>/dev/null | head
 ```
 
-Primary CLI flow:
+## Update Local Skill Paths
+
+After discovery, update your local/private skill copy only if your runtime differs from repo-relative defaults.
+Keep this Git-tracked template generic.
+
+## Mandatory Phase Order
+
+1. reverse-knowledge-tree
+2. manim-code-patterns
+3. visual-planner
+4. verbose-prompt-builder
+5. code synthesis
+6. hard-gated render checks
+
+## Reference Loading
+
+Load required docs from `skills/manim-slides/references/` in this order:
+
+1. `reverse-knowledge-tree.md`
+2. `manim-code-patterns.md`
+3. `benchmark-motifs.md`
+4. `visual-planner.md`
+5. `verbose-prompt-format.md`
+6. `manim-slides-api-cheatsheet.md`
+
+## Runtime
+
+Preferred wrapper flow:
 
 ```bash
-/Users/warrenlow/Documents/projects/papertool/scripts/skill-runtime/run-manim-slides.sh render /abs/path/slides.py Deck
-/Users/warrenlow/Documents/projects/papertool/scripts/skill-runtime/run-manim-slides.sh present Deck
-/Users/warrenlow/Documents/projects/papertool/scripts/skill-runtime/run-manim-slides.sh convert Deck /abs/path/output.html
+scripts/skill-runtime/run-manim-slides.sh render /abs/path/slides.py Deck
+scripts/skill-runtime/run-manim-slides.sh present Deck
+scripts/skill-runtime/run-manim-slides.sh convert Deck /abs/path/output.html
 ```
 
-Python fallback flow:
+Fallback:
 
 ```bash
-/Users/warrenlow/Documents/projects/papertool/scripts/skill-runtime/run-manim-slides.sh python /abs/path/slides.py
+uvx --from "manim-slides[manim]" manim-slides --help
 ```
 
-## Persistent Topic Cache
+## Cache Artifacts
 
-For topic `<slug>`, use this directory:
-
-- `/Users/warrenlow/Documents/projects/papertool/.manim-slides/<slug>/`
-
-Required artifacts:
+Per topic slug under `.manim-slides/<slug>/`:
 
 - `knowledge_tree.json`
 - `concept_plan.json`

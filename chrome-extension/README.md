@@ -26,7 +26,7 @@ After install, it adds inline `Save to PaperTool` buttons on:
 3. Or click extension popup and use `Capture Current Tab` on any page.
 4. Set endpoint in popup:
    - local default: `http://127.0.0.1:17345`
-   - remote example: `http://ghost:18443`
+   - remote example: `http://<SERVER>:18443`
 5. Set Bearer token in popup if remote API auth is enabled.
 
 Queue behavior:

@@ -1,24 +1,43 @@
 ---
 name: papertool
-description: Operate the local PaperTool system for research reading workflows, including importing paper/resource URLs, planning daily reading, running paper-of-the-day prompts, managing queue states (inbox/today/next/later/done), generating quizzes, and submitting scored answers for spaced review. Use when the user asks to study papers, organize reading tasks, run quiz/review loops, or ingest paper-related resources into the PaperTool library.
+description: Operate a local PaperTool system for research reading workflows, including import, queueing, ask, quiz/review loops, citations, and medals.
 ---
 
 # PaperTool Skill
 
-Use the PaperTool project at `/Users/warrenlow/Documents/projects/papertool`.
+Use this skill when the user asks to study papers, ingest resources, run quizzes/reviews, or manage reading workflow state.
+
+## Path Discovery (Required First)
+
+1. Locate PaperTool repo root (look for `papertool/cli.py` and `pyproject.toml`).
+2. From repo root, use wrapper path: `scripts/skill-runtime/run-papertool.sh`.
+3. If wrapper is missing, use uv fallback from repo root.
+
+Suggested discovery commands:
+
+```bash
+pwd
+rg --files | rg '^papertool/cli.py$|^scripts/skill-runtime/run-papertool.sh$|^pyproject.toml$'
+find ~ -type f -path '*/papertool/cli.py' 2>/dev/null | head
+```
+
+## Update Local Skill Paths
+
+After discovery, update your local/private skill copy if your environment differs from repo-relative defaults.
+Keep this Git-tracked skill generic.
 
 ## Runtime (No Manual Venv)
 
-Use wrapper commands first:
+Preferred wrapper:
 
 ```bash
-/Users/warrenlow/Documents/projects/papertool/scripts/skill-runtime/run-papertool.sh <papertool args>
+scripts/skill-runtime/run-papertool.sh <papertool args>
 ```
 
-Direct fallback:
+Fallback:
 
 ```bash
-uv run --project /Users/warrenlow/Documents/projects/papertool papertool <args>
+uv run --project . papertool <args>
 ```
 
 ## Core Commands
@@ -26,64 +45,68 @@ uv run --project /Users/warrenlow/Documents/projects/papertool papertool <args>
 Initialize config:
 
 ```bash
-/Users/warrenlow/Documents/projects/papertool/scripts/skill-runtime/run-papertool.sh init --library-dir ./library --db-path ./.papertool/papertool.db
+scripts/skill-runtime/run-papertool.sh init --library-dir ./library --db-path ./.papertool/papertool.db
 ```
 
 Ingest local files:
 
 ```bash
-/Users/warrenlow/Documents/projects/papertool/scripts/skill-runtime/run-papertool.sh ingest
+scripts/skill-runtime/run-papertool.sh ingest
 ```
 
-Import resources by URL:
+Import resource by URL:
 
 ```bash
-/Users/warrenlow/Documents/projects/papertool/scripts/skill-runtime/run-papertool.sh import-url "<url>"
+scripts/skill-runtime/run-papertool.sh import-url "<url>"
 ```
 
 Query library:
 
 ```bash
-/Users/warrenlow/Documents/projects/papertool/scripts/skill-runtime/run-papertool.sh ask "<question>"
+scripts/skill-runtime/run-papertool.sh ask "<question>"
 ```
 
 Non-interactive ask requires explicit confirmation choice:
 
 ```bash
-/Users/warrenlow/Documents/projects/papertool/scripts/skill-runtime/run-papertool.sh ask --confirm yes "<question>"
-/Users/warrenlow/Documents/projects/papertool/scripts/skill-runtime/run-papertool.sh ask --confirm no "<question>"
+scripts/skill-runtime/run-papertool.sh ask --confirm yes "<question>"
+scripts/skill-runtime/run-papertool.sh ask --confirm no "<question>"
 ```
 
-Scope ask to specific papers:
+Scope ask to specific paper(s):
 
 ```bash
-/Users/warrenlow/Documents/projects/papertool/scripts/skill-runtime/run-papertool.sh ask --paper-id 9047bb47 --confirm yes "<question>"
+scripts/skill-runtime/run-papertool.sh ask --paper-id <paper_id_or_prefix> --confirm yes "<question>"
 ```
 
 ## Daily Reading Workflow
 
 ```bash
-/Users/warrenlow/Documents/projects/papertool/scripts/skill-runtime/run-papertool.sh today --count 3
-/Users/warrenlow/Documents/projects/papertool/scripts/skill-runtime/run-papertool.sh paper-of-day --quiz
-/Users/warrenlow/Documents/projects/papertool/scripts/skill-runtime/run-papertool.sh complete-reading --paper-id <paper_id> --quiz-count 3
-/Users/warrenlow/Documents/projects/papertool/scripts/skill-runtime/run-papertool.sh submit-answer --question-id <question_id> --answer "<answer>" --score 0.7
-/Users/warrenlow/Documents/projects/papertool/scripts/skill-runtime/run-papertool.sh review-due --count 5
+scripts/skill-runtime/run-papertool.sh today --count 3
+scripts/skill-runtime/run-papertool.sh paper-of-day --quiz
+scripts/skill-runtime/run-papertool.sh complete-reading --paper-id <paper_id> --quiz-count 3
+scripts/skill-runtime/run-papertool.sh submit-answer --question-id <question_id> --answer "<answer>" --score 0.7
+scripts/skill-runtime/run-papertool.sh review-due --count 5
 ```
 
 ## Citations
 
 ```bash
-/Users/warrenlow/Documents/projects/papertool/scripts/skill-runtime/run-papertool.sh citations rebuild
-/Users/warrenlow/Documents/projects/papertool/scripts/skill-runtime/run-papertool.sh citations inspect --paper-id <paper_id>
+scripts/skill-runtime/run-papertool.sh citations rebuild
+scripts/skill-runtime/run-papertool.sh citations status
+scripts/skill-runtime/run-papertool.sh citations inspect --paper-id <paper_id>
 ```
 
 ## Goals and Medals
 
 ```bash
-/Users/warrenlow/Documents/projects/papertool/scripts/skill-runtime/run-papertool.sh goal set --daily 2 --timezone America/Los_Angeles
-/Users/warrenlow/Documents/projects/papertool/scripts/skill-runtime/run-papertool.sh medals dashboard --output ./.papertool/medals.html
+scripts/skill-runtime/run-papertool.sh goal set --daily 2 --timezone America/Los_Angeles
+scripts/skill-runtime/run-papertool.sh goal status
+scripts/skill-runtime/run-papertool.sh medals status --limit 100
+scripts/skill-runtime/run-papertool.sh medals dashboard --output ./.papertool/medals.html
 ```
 
 ## Notes Workflow
 
-For study-heavy interactions, default to saving notes in Obsidian vault `/Users/warrenlow/Documents/llm-notes` using the `obsidian-papertool` skill format (`Summary`, `Notes`, `Q&A`).
+For study-heavy interactions, pair with `obsidian-papertool` skill.
+Use `Summary`, `Notes`, and `Q&A` structure and avoid raw retrieval chunks in final notes.
