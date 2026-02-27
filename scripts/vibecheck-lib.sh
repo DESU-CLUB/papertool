@@ -25,6 +25,10 @@ vc_config_file() {
   printf "%s/vibecommit.toml" "$(vc_repo_root)"
 }
 
+vc_ignore_file() {
+  printf "%s/.vibeignore" "$(vc_repo_root)"
+}
+
 vc_log() {
   printf "[vibecheck] %s\n" "$*" >&2
 }
@@ -406,7 +410,23 @@ vc_commit_context() {
   local commit_message staged_diff
 
   commit_message="$(cat "$message_file")"
-  staged_diff="$(git diff --cached --unified=0 --no-color)"
+  local ignore_file
+  ignore_file="$(vc_ignore_file)"
+  local -a exclude_specs
+  if [[ -f "$ignore_file" ]]; then
+    local raw_line line
+    while IFS= read -r raw_line || [[ -n "$raw_line" ]]; do
+      line="$(vc_trim "${raw_line%%#*}")"
+      [[ -z "$line" ]] && continue
+      exclude_specs+=(":(exclude)$line")
+    done < "$ignore_file"
+  fi
+
+  if (( ${#exclude_specs[@]} > 0 )); then
+    staged_diff="$(git diff --cached --unified=0 --no-color -- . "${exclude_specs[@]}")"
+  else
+    staged_diff="$(git diff --cached --unified=0 --no-color)"
+  fi
 
   printf "Commit message:\n%s\n\nStaged diff:\n%s\n" \
     "$commit_message" \

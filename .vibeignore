@@ -1,0 +1,5 @@
+# Paths excluded from VibeCommit diff context generation.
+# This only affects quiz context generation, not git staging/committing.
+
+README.md
+.claude-plugin/README.md

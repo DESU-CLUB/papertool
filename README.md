@@ -51,6 +51,11 @@ Manim subskill references:
 - `skills/manim-slides/references/verbose-prompt-format.md`
 - `skills/manim-slides/references/manim-slides-api-cheatsheet.md`
 
+Attribution:
+- Slide deck creation direction is inspired by [Math-To-Manim](https://github.com/HarleyCoops/Math-To-Manim) by HarleyCoops.
+- Animation engine lineage references [Manim](https://github.com/3b1b/manim) by 3Blue1Brown.
+- Slide/presenter workflow references [Manim Slides](https://github.com/jeertmans/manim-slides) by Jean Eertmans.
+
 Manim phase contract (strict order):
 1. reverse-knowledge-tree
 2. manim-code-patterns
@@ -74,18 +79,6 @@ Install plugin in Claude Code:
 
 ```text
 /plugin install /Users/warrenlow/Documents/projects/papertool
-```
-
-Sync skill targets:
-
-```bash
-/Users/warrenlow/Documents/projects/papertool/scripts/sync-skill-targets.sh
-```
-
-Optional mirrors:
-
-```bash
-/Users/warrenlow/Documents/projects/papertool/scripts/sync-skill-targets.sh --mirror-codex-home --mirror-claude-home
 ```
 
 ## Run It (Quickstart)
@@ -123,6 +116,11 @@ If you want browser capture, run:
 papertool bridge --host 127.0.0.1 --port 17345
 ```
 
+Bridge internals:
+- Starts a local HTTP capture API for extension/app integrations.
+- Routes captured URLs into PaperTool import + queue logic.
+- Stores results in your configured local/hybrid backend.
+
 ## Configure
 
 Create config:
@@ -151,6 +149,50 @@ Key config flags:
 - `ask_confirmation_mode` (`session|always|never`), `ask_session_ttl_sec`, `ask_cli_auto_session`
 - `citation_refresh_on_import`
 - `citation_title_match_mode` (`conservative|balanced|aggressive`)
+
+## Operational Reference
+
+Use this section for day-to-day commands and behavior details.
+
+Bridge API (extension/app capture):
+
+```bash
+papertool bridge --host 127.0.0.1 --port 17345
+```
+
+How it works:
+- Starts a local HTTP capture API.
+- Captured URLs are routed through normal import/ingest logic.
+- Data is persisted into your configured local/hybrid backend.
+
+Citation graph export:
+
+```bash
+papertool graph export --format html --output ./.papertool/graph.html
+papertool graph export --format json --output ./.papertool/graph.json
+papertool graph export --format mermaid --output ./.papertool/graph.mmd
+```
+
+How it works:
+- A full citation rebuild runs before export.
+- Export fails if rebuild fails, so graph artifacts cannot silently go stale.
+- Output formats are alternate views over the same rebuilt citation edges.
+
+Medals and streak dashboard:
+
+```bash
+papertool medals status --limit 100
+papertool medals recompute --from 2026-02-01
+papertool medals dashboard --output ./.papertool/medals.html
+```
+
+Medal Logic:
+- A paper is day-qualified only when it is completed that day and has at least one same-day quiz/review answer.
+- Bronze is awarded for day-qualified papers on goal-met days; Bronze is permanent.
+- Silver requires Bronze and follows latest review score: `>= 0.9` means active, `< 0.9` means inactive.
+- Gold requires Bronze and at least one linked GitHub repo owned by `DESU-CLUB`; Gold is permanent.
+- Streak increments on goal-met days and resets to `0` when the daily goal is missed.
+- Dashboard output is static HTML generated from DB state.
 
 ## Usage
 
@@ -309,6 +351,33 @@ papertool graph export --format mermaid --output ./.papertool/graph.mmd
 papertool graph export --format html --output ./.papertool/graph.html
 ```
 
+Graph export internals:
+- `graph export` runs a full citation rebuild first.
+- Export fails if citation rebuild fails, preventing stale graph files.
+- Formats (`json`, `mermaid`, `html`) are different views of the same rebuilt citation edges.
+
+## Manim Slides Optional Dependencies
+
+For better rendering stability and math support:
+
+1. `ffmpeg`
+2. `pkg-config`
+3. Cairo/Pango libraries
+4. LaTeX toolchain plus `dvisvgm`
+
+macOS (Homebrew):
+
+```bash
+brew install ffmpeg pkg-config cairo pango mactex-no-gui dvisvgm
+```
+
+Ubuntu/Debian:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y ffmpeg pkg-config libcairo2-dev libpango1.0-dev texlive-full dvisvgm
+```
+
 ## MCP Server
 
 Run:
@@ -425,6 +494,26 @@ The resource is downloaded/converted into `library/captures/` and ingested autom
 - Q&A answering is retrieval-backed and extractive by default (no external LLM call).
 - PDF extraction quality depends on text layer quality in PDFs.
 - Quiz answers with scores automatically update spaced-review cards (low score resets interval, high score expands interval). Score accepts `0-1` or `0-10` and normalizes to `0-1`.
+
+## Developer Appendix (Optional)
+
+Skill sync is for maintainers and local skill distribution:
+
+```bash
+/Users/warrenlow/Documents/projects/papertool/scripts/sync-skill-targets.sh
+```
+
+Optional mirrors:
+
+```bash
+/Users/warrenlow/Documents/projects/papertool/scripts/sync-skill-targets.sh --mirror-codex-home --mirror-claude-home
+```
+
+Parity check only:
+
+```bash
+/Users/warrenlow/Documents/projects/papertool/scripts/sync-skill-targets.sh --check
+```
 
 ## Run tests
 
